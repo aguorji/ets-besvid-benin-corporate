@@ -11,6 +11,8 @@ const authRoutes = require('./routes/authRoutes');
 const consignmentRoutes = require('./routes/consignmentRoutes');
 const productRoutes = require('./routes/productRoutes');
 const saleRoutes = require('./routes/saleRoutes');
+const expenseRoutes = require('./routes/expenseRoutes');
+const byproductRoutes = require('./routes/byproductRoutes');
 
 const app = express();
 
@@ -24,8 +26,11 @@ app.use(cors({
 // MOUNT ROUTES HERE (Directly below middleware configurations)
 app.use('/api/auth', authRoutes);
 app.use('/api/consignments', consignmentRoutes);
-app.use('/api/products', productRoutes);`
+app.use('/api/products', productRoutes);
 app.use('/api/sales', saleRoutes);
+app.use('/api/expenses', expenseRoutes);
+app.use('/api/byproducts', byproductRoutes);
+
 // 2. Database Connection Handling Engine
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/ets_besvid_db';
 mongoose.connect(MONGO_URI)
@@ -37,7 +42,7 @@ mongoose.connect(MONGO_URI)
 
 // 3. Health Check Verification Endpoint
 app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: "online", message: "ETS Besvid Benin secure server core running in CFA metric." });
+  res.status(200).json({ status: "online", message: "ETS Besvid secure multi-currency server core running successfully." });
 });
 
 // 4. Global Error Catch Gate (Prevents server crashes on bad inputs)

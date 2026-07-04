@@ -6,6 +6,9 @@ const dotenv = require('dotenv');
 // Load secure environment variables from hidden configuration manager
 dotenv.config();
 
+// IMPORT ROUTES HERE (Above database connection)
+const authRoutes = require('./routes/authRoutes');
+
 const app = express();
 
 // 1. Secure Middleware Layers
@@ -14,6 +17,9 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173', // Restricts access only to your trusted frontend app
   optionsSuccessStatus: 200
 }));
+
+// MOUNT ROUTES HERE (Directly below middleware configurations)
+app.use('/api/auth', authRoutes);
 
 // 2. Database Connection Handling Engine
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/ets_besvid_db';

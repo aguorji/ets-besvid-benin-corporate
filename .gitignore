@@ -27,3 +27,4 @@ dist-ssr
 .env
 .cursor/
 .cursorrules
+backend/.env

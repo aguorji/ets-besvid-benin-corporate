@@ -10,6 +10,7 @@ dotenv.config();
 const authRoutes = require('./routes/authRoutes');
 const consignmentRoutes = require('./routes/consignmentRoutes');
 const productRoutes = require('./routes/productRoutes');
+const saleRoutes = require('./routes/saleRoutes');
 
 const app = express();
 
@@ -23,7 +24,8 @@ app.use(cors({
 // MOUNT ROUTES HERE (Directly below middleware configurations)
 app.use('/api/auth', authRoutes);
 app.use('/api/consignments', consignmentRoutes);
-app.use('/api/products', productRoutes);
+app.use('/api/products', productRoutes);`
+app.use('/api/sales', saleRoutes);
 // 2. Database Connection Handling Engine
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/ets_besvid_db';
 mongoose.connect(MONGO_URI)

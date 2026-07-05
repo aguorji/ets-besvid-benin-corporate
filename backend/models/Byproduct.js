@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const ByproductSchema = new mongoose.Schema({
   date: { type: Date, default: Date.now },
@@ -15,4 +15,4 @@ ByproductSchema.pre('save', function(next) {
   next();
 });
 
-module.exports = mongoose.model('Byproduct', ByproductSchema);
+export default mongoose.model('Byproduct', ByproductSchema);

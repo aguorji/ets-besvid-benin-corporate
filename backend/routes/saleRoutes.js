@@ -1,7 +1,8 @@
-const express = require('express');
+import express from 'express';
+import { recordSaleTransaction, getAccountsReceivable } from '../controllers/saleController.js';
+import { protectGate } from '../middleware/authSecurity.js';
+
 const router = express.Router();
-const { recordSaleTransaction, getAccountsReceivable } = require('../controllers/saleController');
-const { protectGate } = require('../middleware/authSecurity');
 
 // Standard transaction route configuration
 router.route('/')
@@ -11,4 +12,4 @@ router.route('/')
 router.route('/receivables')
   .get(protectGate, getAccountsReceivable);
 
-module.exports = router;
+export default router;

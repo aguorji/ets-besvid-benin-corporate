@@ -1,6 +1,9 @@
-const Byproduct = require('../models/Byproduct');
+import Byproduct from '../models/Byproduct.js';
 
-exports.logByproductSale = async (req, res) => {
+// @desc     Log a Byproduct / Waste Reclamation Sale
+// @route    POST /api/byproducts
+// @access   Private
+export const logByproductSale = async (req, res) => {
   const { type, sub_type, quantity, price_per_unit, date } = req.body;
   try {
     const byproduct = await Byproduct.create({
@@ -17,7 +20,10 @@ exports.logByproductSale = async (req, res) => {
   }
 };
 
-exports.getByproductLedger = async (req, res) => {
+// @desc     Fetch Complete Byproduct Sales Ledger
+// @route    GET /api/byproducts
+// @access   Private
+export const getByproductLedger = async (req, res) => {
   try {
     const ledger = await Byproduct.find()
       .populate('recorded_by', 'name email')

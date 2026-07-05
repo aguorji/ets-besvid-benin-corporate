@@ -1,22 +1,23 @@
-const dns = require('node:dns');
-dns.setServers(['8.8.8.8', '1.1.1.1']);
+import dns from 'dns';
+// Force Node.js to use Google DNS to resolve Atlas SRV records properly
+dns.setServers(['8.8.8.8', '8.8.4.4']);
 
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const dotenv = require('dotenv');
+import express from 'express';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import dotenv from 'dotenv';
 
 // Load secure environment variables from hidden configuration manager
 dotenv.config();
 
 // IMPORT ROUTES HERE (Above database connection)
-const authRoutes = require('./routes/authRoutes');
-const consignmentRoutes = require('./routes/consignmentRoutes');
-const productRoutes = require('./routes/productRoutes');
-const saleRoutes = require('./routes/saleRoutes');
-const expenseRoutes = require('./routes/expenseRoutes');
-const byproductRoutes = require('./routes/byproductRoutes');
-const dashboardRoutes = require('./routes/dashboardRoutes');
+import authRoutes from './routes/authRoutes.js';
+import consignmentRoutes from './routes/consignmentRoutes.js';
+import productRoutes from './routes/productRoutes.js';
+import saleRoutes from './routes/saleRoutes.js';
+import expenseRoutes from './routes/expenseRoutes.js';
+import byproductRoutes from './routes/byproductRoutes.js';
+import dashboardRoutes from './routes/dashboardRoutes.js';
 
 const app = express();
 

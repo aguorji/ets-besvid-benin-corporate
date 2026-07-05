@@ -1,6 +1,9 @@
-const Expense = require('../models/Expense');
+import Expense from '../models/Expense.js';
 
-exports.logExpense = async (req, res) => {
+// @desc     Log an Operational Overhead Expense
+// @route    POST /api/expenses
+// @access   Private
+export const logExpense = async (req, res) => {
   const { category, description, amount, date } = req.body;
   try {
     const expense = await Expense.create({
@@ -16,7 +19,10 @@ exports.logExpense = async (req, res) => {
   }
 };
 
-exports.getExpenseLedger = async (req, res) => {
+// @desc     Fetch Complete Operational Expense Ledger
+// @route    GET /api/expenses
+// @access   Private
+export const getExpenseLedger = async (req, res) => {
   try {
     const ledger = await Expense.find()
       .populate('recorded_by', 'name email')

@@ -1,12 +1,12 @@
-const Sale = require('../models/Sale');
-const Expense = require('../models/Expense');
-const Byproduct = require('../models/Byproduct');
-const Consignment = require('../models/Consignment');
+import Sale from '../models/Sale.js';
+import Expense from '../models/Expense.js';
+import Byproduct from '../models/Byproduct.js';
+import Consignment from '../models/Consignment.js';
 
-// @desc    Compile All Core Business Metrics for Main Office Analytics
-// @route   GET /api/dashboard/summary
-// @access  Private
-exports.getDashboardSummary = async (req, res) => {
+// @desc     Compile All Core Business Metrics for Main Office Analytics
+// @route    GET /api/dashboard/summary
+// @access   Private
+export const getDashboardSummary = async (req, res) => {
   try {
     // 1. Aggregate Sales Revenue & Receivables Balance
     const salesMetrics = await Sale.aggregate([
@@ -59,7 +59,7 @@ exports.getDashboardSummary = async (req, res) => {
     // Calculate Overall Corporate Performance Variables
     const totalGrossInflow = sales.totalSalesRevenue + byproducts.totalByproductRevenue;
     const totalOutflow = expenses.totalExpenses + consignments.totalConsignmentCost;
-    
+
     // Net profit calculation based on physical collected cash vs total outlays
     const netCashPosition = sales.totalCollectedCash + byproducts.totalByproductRevenue - expenses.totalExpenses;
 

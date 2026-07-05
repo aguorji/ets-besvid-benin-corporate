@@ -1,7 +1,8 @@
-const express = require('express');
+import express from 'express';
+import { createProductItem, logProductionRun, getInventoryLedger } from '../controllers/productController.js';
+import { protectGate } from '../middleware/authSecurity.js';
+
 const router = express.Router();
-const { createProductItem, logProductionRun, getInventoryLedger } = require('../controllers/productController');
-const { protectGate } = require('../middleware/authSecurity');
 
 // Inventory reading and product cataloging paths
 router.route('/')
@@ -11,4 +12,4 @@ router.route('/')
 // Sub-route designated for logging specific production run variations
 router.post('/:id/production', protectGate, logProductionRun);
 
-module.exports = router;
+export default router;

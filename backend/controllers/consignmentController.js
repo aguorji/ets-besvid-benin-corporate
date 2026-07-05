@@ -1,9 +1,9 @@
-const Consignment = require('../models/Consignment');
+import Consignment from '../models/Consignment.js';
 
-// @desc    Record a New Consignment & Initialize its Cost Pool
-// @route   POST /api/consignments
-// @access  Private
-exports.createConsignment = async (req, res) => {
+// @desc     Record a New Consignment & Initialize its Cost Pool
+// @route    POST /api/consignments
+// @access   Private
+export const createConsignment = async (req, res) => {
   const { consignment_ref, arrival_date, description, purchase_price, shipping_freight, port_clearing, transport } = req.body;
 
   try {
@@ -34,10 +34,10 @@ exports.createConsignment = async (req, res) => {
   }
 };
 
-// @desc    Fetch All Active Consignments
-// @route   GET /api/consignments
-// @access  Private
-exports.getAllConsignments = async (req, res) => {
+// @desc     Fetch All Active Consignments
+// @route    GET /api/consignments
+// @access   Private
+export const getAllConsignments = async (req, res) => {
   try {
     const consignments = await Consignment.find()
       .populate('recorded_by', 'name email')

@@ -1,20 +1,20 @@
-const Sale = require('../models/Sale');
-const ProductItem = require('../models/ProductItem');
+import Sale from '../models/Sale.js';
+import ProductItem from '../models/ProductItem.js';
 
-// @desc    Log a Wholesale Transaction & Automatically Process Inventory Deductions and Debt Status
-// @route   POST /api/sales
-// @access  Private
-exports.recordSaleTransaction = async (req, res) => {
-  const { 
-    product_id, 
-    production_ref, 
-    consignment_id, 
-    actual_size, 
-    quantity_sold, 
-    selling_price, 
-    customer_name, 
-    payment_type, 
-    amount_paid 
+// @desc     Log a Wholesale Transaction & Automatically Process Inventory Deductions and Debt Status
+// @route    POST /api/sales
+// @access   Private
+export const recordSaleTransaction = async (req, res) => {
+  const {
+    product_id,
+    production_ref,
+    consignment_id,
+    actual_size,
+    quantity_sold,
+    selling_price,
+    customer_name,
+    payment_type,
+    amount_paid
   } = req.body;
 
   try {
@@ -32,8 +32,8 @@ exports.recordSaleTransaction = async (req, res) => {
 
     // 3. Prevent transaction if stock balances are insufficient
     if (variation.quantity_balance < quantity_sold) {
-      return res.status(400).json({ 
-        error: `Insufficient Stock Level. Attempted to sell ${quantity_sold} units, but only ${variation.quantity_balance} are remaining in inventory.` 
+      return res.status(400).json({
+        error: `Insufficient Stock Level. Attempted to sell ${quantity_sold} units, but only ${variation.quantity_balance} are remaining in inventory.`
       });
     }
 
@@ -60,7 +60,7 @@ exports.recordSaleTransaction = async (req, res) => {
 
     // 6. DEDUCT INVENTORY BALANCE: Adjust quantities sold directly in parent product document array
     variation.quantity_sold += quantity_sold;
-    
+
     // Save updated parent inventory document (recomputes balances and remaining stock value hooks)
     await product.save();
 
@@ -73,16 +73,16 @@ exports.recordSaleTransaction = async (req, res) => {
   }
 };
 
-// @desc    Fetch Active Accounts Receivable / Outstanding Customer Debts Ledger
-// @route   GET /api/sales/receivables
-// @access  Private
-exports.getAccountsReceivable = async (req, res) => {
+// @desc     Fetch Active Accounts Receivable / Outstanding Customer Debts Ledger
+// @route    GET /api/sales/receivables
+// @access   Private
+export const getAccountsReceivable = async (req, res) => {
   try {
     const debtorsList = await Sale.find({ debt_status: 'Owing' })
       .populate('product_id', 'name initials')
       .populate('recorded_by', 'name email')
       .sort({ createdAt: -1 });
-      
+
     res.status(200).json(debtorsList);
   } catch (error) {
     res.status(500).json({ error: "Failed to compile active debt ledger matrix." });

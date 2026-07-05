@@ -1,9 +1,9 @@
-const ProductItem = require('../models/ProductItem');
+import ProductItem from '../models/ProductItem.js';
 
-// @desc    Create a New Core Product Catalog Item (e.g., Grade A Shirts, Mixed Rags)
-// @route   POST /api/products
-// @access  Private
-exports.createProductItem = async (req, res) => {
+// @desc     Create a New Core Product Catalog Item (e.g., Grade A Shirts, Mixed Rags)
+// @route    POST /api/products
+// @access   Private
+export const createProductItem = async (req, res) => {
   const { name, initials, unit, standard_size } = req.body;
 
   try {
@@ -26,10 +26,10 @@ exports.createProductItem = async (req, res) => {
   }
 };
 
-// @desc    Log a Production Run / Split-Bale Entry (Creates or updates a stock variation)
-// @route   POST /api/products/:id/production
-// @access  Private
-exports.logProductionRun = async (req, res) => {
+// @desc     Log a Production Run / Split-Bale Entry (Creates or updates a stock variation)
+// @route    POST /api/products/:id/production
+// @access   Private
+export const logProductionRun = async (req, res) => {
   const { production_ref, consignment_id, actual_size, quantity_produced, base_price } = req.body;
   const productId = req.params.id;
 
@@ -76,10 +76,10 @@ exports.logProductionRun = async (req, res) => {
   }
 };
 
-// @desc    Fetch Complete Inventory Ledger Matrix
-// @route   GET /api/products
-// @access  Private
-exports.getInventoryLedger = async (req, res) => {
+// @desc     Fetch Complete Inventory Ledger Matrix
+// @route    GET /api/products
+// @access   Private
+export const getInventoryLedger = async (req, res) => {
   try {
     const inventory = await ProductItem.find()
       .populate('stock_variations.consignment_id', 'consignment_ref arrival_date');

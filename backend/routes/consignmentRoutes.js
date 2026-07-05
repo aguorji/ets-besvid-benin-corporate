@@ -1,11 +1,12 @@
-const express = require('express');
+import express from 'express';
+import { createConsignment, getAllConsignments } from '../controllers/consignmentController.js';
+import { protectGate } from '../middleware/authSecurity.js';
+
 const router = express.Router();
-const { createConsignment, getAllConsignments } = require('../controllers/consignmentController');
-const { protectGate } = require('../middleware/authSecurity');
 
 // Both creation and viewing require the user to be logged in
 router.route('/')
   .post(protectGate, createConsignment)
   .get(protectGate, getAllConsignments);
 
-module.exports = router;
+export default router;

@@ -1,25 +1,21 @@
 import mongoose from 'mongoose';
 
 const ConsignmentSchema = new mongoose.Schema({
-  consignment_ref: { type: String, required: true, unique: true },
-  arrival_date: { type: Date, required: true },
-  description: String,
+  consignment_ref: { type: String, required: true, unique: true, uppercase: true, trim: true },
+  type: { type: String, enum: ['direct_container', 'giant_bale'], required: true },
+  status: { type: String, enum: ['ordered', 'arrived', 'processing', 'completed'], default: 'arrived' },
+  arrival_date: { type: Date, default: Date.now },
+  
+  // Financial metrics for calculating precise landed cost distribution later
+  total_landing_cost: { type: Number, required: true, default: 0 },
+  notes: { type: String, trim: true },
 
-  cost_pool: {
-    purchase_price: { type: Number, required: true, default: 0 },
-    shipping_freight: { type: Number, required: true, default: 0 },
-    port_clearing: { type: Number, required: true, default: 0 },
-    transport: { type: Number, required: true, default: 0 },
-    total_consignment_cost: { type: Number, required: true, default: 0 }
-  },
-
-  recorded_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
+  // Tracking sorted structural output metrics
+  processing_run: {
+    total_raw_weight: { type: Number, default: 0 }, // Used if giant_bale
+    bales_produced: { type: Number, default: 0 },   // Total count of standard bales packed
+    byproducts_kgs: { type: Number, default: 0 }    // Total weight of loose residue sold in sacks
+  }
 }, { timestamps: true });
-
-ConsignmentSchema.pre('save', function(next) {
-  const cp = this.cost_pool;
-  cp.total_consignment_cost = cp.purchase_price + cp.shipping_freight + cp.port_clearing + cp.transport;
-  next();
-});
 
 export default mongoose.model('Consignment', ConsignmentSchema);

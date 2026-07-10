@@ -1,15 +1,15 @@
 import express from 'express';
-import { createProductItem, logProductionRun, getInventoryLedger } from '../controllers/productController.js';
-import { protectGate } from '../middleware/authSecurity.js';
+import { createProduct, getProducts, addStockVariation } from '../controllers/productController.js';
 
 const router = express.Router();
 
-// Inventory reading and product cataloging paths
+// Base Product pathways mapping cleanly to your Master Items view
 router.route('/')
-  .post(protectGate, createProductItem)
-  .get(protectGate, getInventoryLedger);
+  .post(createProduct)
+  .get(getProducts);
 
-// Sub-route designated for logging specific production run variations
-router.post('/:id/production', protectGate, logProductionRun);
+// Nested route to append new container production batches (e.g. Batch 1, Batch 2)
+router.route('/:id/variations')
+  .post(addStockVariation);
 
 export default router;

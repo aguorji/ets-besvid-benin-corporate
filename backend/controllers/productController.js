@@ -1,90 +1,69 @@
 import ProductItem from '../models/ProductItem.js';
 
-// @desc     Create a New Core Product Catalog Item (e.g., Grade A Shirts, Mixed Rags)
-// @route    POST /api/products
-// @access   Private
-export const createProductItem = async (req, res) => {
-  const { name, initials, unit, standard_size } = req.body;
-
+// @desc    Register a completely new root product type (e.g., LMD, MCSH)
+// @route   POST /api/products
+export const createProduct = async (req, res) => {
   try {
-    const itemExists = await ProductItem.findOne({ initials: initials.toUpperCase() });
-    if (itemExists) {
-      return res.status(400).json({ error: `A product line with initials [${initials.toUpperCase()}] already exists.` });
+    const { itemCode, description, unit, standardSize } = req.body;
+
+    const duplicateCheck = await ProductItem.findOne({ itemCode: itemCode.toUpperCase() });
+    if (duplicateCheck) {
+      return res.status(400).json({ message: `Product item code '${itemCode.toUpperCase()}' already exists.` });
     }
 
-    const product = await ProductItem.create({
-      name,
-      initials: initials.toUpperCase(),
-      unit: unit || 'KGS',
-      standard_size,
+    const newProduct = await ProductItem.create({
+      itemCode,
+      description,
+      unit,
+      standardSize,
       stock_variations: []
     });
 
-    res.status(201).json({ message: "Product line cataloged successfully.", product });
+    res.status(201).json(newProduct);
   } catch (error) {
-    res.status(500).json({ error: "Failed to create core product line definition." });
+    res.status(500).json({ message: 'Error establishing root product', error: error.message });
   }
 };
 
-// @desc     Log a Production Run / Split-Bale Entry (Creates or updates a stock variation)
-// @route    POST /api/products/:id/production
-// @access   Private
-export const logProductionRun = async (req, res) => {
-  const { production_ref, consignment_id, actual_size, quantity_produced, base_price } = req.body;
-  const productId = req.params.id;
-
+// @desc    Fetch all available root products for selection drops
+// @route   GET /api/products
+export const getProducts = async (req, res) => {
   try {
-    const product = await ProductItem.findById(productId);
+    // Dynamically flushes mismatched background indexes to accept empty arrays smoothly
+    await ProductItem.cleanIndexes().catch(() => {});
+    
+    const products = await ProductItem.find({}).sort({ itemCode: 1 });
+    res.status(200).json(products);
+  } catch (error) {
+    res.status(500).json({ message: 'Error retrieving product registry', error: error.message });
+  }
+};
+
+// @desc    Add a brand new stock batch/variation to a specific product
+// @route   POST /api/products/:id/variations
+export const addStockVariation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { production_ref, consignment_id, actual_size, size_type, quantity_produced, base_price, adj_price } = req.body;
+
+    const product = await ProductItem.findById(id);
     if (!product) {
-      return res.status(404).json({ error: "Core product category record not found." });
+      return res.status(404).json({ message: 'Target product not found' });
     }
 
-    // Check if the unique production reference run identifier already exists anywhere in the system
-    const refCheck = await ProductItem.findOne({ "stock_variations.production_ref": production_ref });
-    if (refCheck) {
-      return res.status(400).json({ error: `Production reference run [${production_ref}] has already been processed.` });
-    }
-
-    // CORE MATHEMATICAL LOGIC GATE: Calculate dynamic size scaling variance adjustments
-    // Formula: adjusted_price = base_price * (actual_size / standard_size)
-    const sizeRatio = actual_size / product.standard_size;
-    const adj_price = Math.round(base_price * sizeRatio); // Dynamic alignment across currencies
-
-    const size_type = actual_size === product.standard_size ? 'standard' : 'adjusted';
-
-    // Push the newly verified variation item directly into the MongoDB document sub-array
     product.stock_variations.push({
       production_ref,
       consignment_id,
       actual_size,
       size_type,
       quantity_produced,
-      quantity_sold: 0,
       base_price,
       adj_price
     });
 
-    // Triggers the Mongoose .pre('save') hook to compute balances and stock financial values
     await product.save();
-
-    res.status(201).json({
-      message: "Production run logged. Inventory matrix updated with dynamic weight adjustments.",
-      product
-    });
+    res.status(201).json(product);
   } catch (error) {
-    res.status(500).json({ error: "Failed to execute production run log sequence." });
-  }
-};
-
-// @desc     Fetch Complete Inventory Ledger Matrix
-// @route    GET /api/products
-// @access   Private
-export const getInventoryLedger = async (req, res) => {
-  try {
-    const inventory = await ProductItem.find()
-      .populate('stock_variations.consignment_id', 'consignment_ref arrival_date');
-    res.status(200).json(inventory);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to read core inventory master ledger." });
+    res.status(500).json({ message: 'Error logging stock variation', error: error.message });
   }
 };

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const VariationSchema = new mongoose.Schema({
-  production_ref: { type: String, required: true, unique: true },
+  production_ref: { type: String, required: true, index: { unique: true, sparse: true } },
   consignment_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Consignment', required: true },
 
   actual_size: { type: Number, required: true },
@@ -17,10 +17,10 @@ const VariationSchema = new mongoose.Schema({
 });
 
 const ProductItemSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  initials: { type: String, required: true, uppercase: true },
+  itemCode: { type: String, required: true, uppercase: true, trim: true },
+  description: { type: String, required: true, trim: true },
   unit: { type: String, enum: ['KGS', 'PCS'], default: 'KGS' },
-  standard_size: { type: Number, required: true },
+  standardSize: { type: Number, required: true },
 
   stock_variations: [VariationSchema]
 }, { timestamps: true });

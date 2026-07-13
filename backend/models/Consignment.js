@@ -12,9 +12,26 @@ const ConsignmentSchema = new mongoose.Schema({
 
   // Tracking sorted structural output metrics
   processing_run: {
-    total_raw_weight: { type: Number, default: 0 }, // Used if giant_bale
-    bales_produced: { type: Number, default: 0 },   // Total count of standard bales packed
-    byproducts_kgs: { type: Number, default: 0 }    // Total weight of loose residue sold in sacks
+    total_raw_weight: { type: Number, default: 0 }, 
+    
+    // Track bales grouped by their physical size/weight
+    sorted_items: [
+      {
+        product_ref: { type: String, required: true, uppercase: true, trim: true }, // e.g., 'LMD'
+        target_weight_g_bale: { type: Number, required: true, default: 55 },      // Standard weight (e.g., 55 kg)
+        actual_weight_g_bale: { type: Number, required: true, default: 55 },      // Actual weight of this group (e.g., 50 kg)
+        bales_produced: { type: Number, required: true, default: 0 }              // Quantity of bales at this specific weight (e.g., 1 bale)
+      }
+    ],
+    
+    // Dynamic Byproducts Sacked
+    byproducts_sacked: [
+      {
+        byproduct_type: { type: String, required: true, uppercase: true, trim: true }, 
+        weight_kg: { type: Number, required: true, default: 0 },
+        price_per_kg: { type: Number, default: 0 } 
+      }
+    ]
   }
 }, { timestamps: true });
 

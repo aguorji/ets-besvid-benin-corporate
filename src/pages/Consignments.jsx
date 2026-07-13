@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Loader2, Ship, Plus, X, CheckCircle, AlertCircle, Layers } from 'lucide-react';
+import { Search, Loader2, Ship, Plus, X, CheckCircle, AlertCircle, Layers, Trash2 } from 'lucide-react';
 
 export default function Consignments() {
   const [consignments, setConsignments] = useState([]);
@@ -17,6 +17,19 @@ export default function Consignments() {
   });
   const [submitLoading, setSubmitLoading] = useState(false);
   const [formMessage, setFormMessage] = useState({ type: '', text: '' });
+
+  // --- DYNAMIC SORTING MODAL STATES ---
+  const [showSortModal, setShowSortModal] = useState(false);
+  const [activeSortShip, setActiveSortShip] = useState(null);
+  
+  // Houses our fully dynamic arrays matching our backend expectations
+  const [sortedItems, setSortedItems] = useState([
+    { product_ref: '', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }
+  ]);
+  const [byproductsSacked, setByproductsSacked] = useState([
+    { byproduct_type: '', weight_kg: '', price_per_kg: '' }
+  ]);
+  const [sortLoading, setSortLoading] = useState(false);
 
   // Data Fetching Pipeline
   const fetchConsignments = async () => {
@@ -42,6 +55,40 @@ export default function Consignments() {
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  // --- DYNAMIC HANDLERS FOR SORTED BALES ---
+  const handleAddSortedItem = () => {
+    setSortedItems(prev => [...prev, { product_ref: '', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }]);
+  };
+
+  const handleRemoveSortedItem = (index) => {
+    setSortedItems(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSortedItemChange = (index, field, value) => {
+    setSortedItems(prev => {
+      const updated = [...prev];
+      updated[index][field] = value;
+      return updated;
+    });
+  };
+
+  // --- DYNAMIC HANDLERS FOR BYPRODUCTS ---
+  const handleAddByproduct = () => {
+    setByproductsSacked(prev => [...prev, { byproduct_type: '', weight_kg: '', price_per_kg: '' }]);
+  };
+
+  const handleRemoveByproduct = (index) => {
+    setByproductsSacked(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleByproductChange = (index, field, value) => {
+    setByproductsSacked(prev => {
+      const updated = [...prev];
+      updated[index][field] = value;
+      return updated;
+    });
   };
 
   const handleFormSubmit = async (e) => {
@@ -70,6 +117,58 @@ export default function Consignments() {
       setFormMessage({ type: 'error', text: err.message });
     } finally {
       setSubmitLoading(false);
+    }
+  };
+
+  // --- DYNAMIC SORTING TRANSACTION SUBMISSION ---
+  const handleSortSubmit = async (e) => {
+    e.preventDefault();
+    
+    // Filter out empty rows to avoid bad database submissions
+    const cleanItems = sortedItems.filter(item => item.product_ref.trim() !== '');
+    const cleanByproducts = byproductsSacked.filter(by => by.byproduct_type.trim() !== '');
+
+    if (cleanItems.length === 0) {
+      alert("⚠️ You must log at least one completed bale variety!");
+      return;
+    }
+
+    setSortLoading(true);
+    try {
+      const response = await fetch(`/api/consignments/${activeSortShip._id}/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sortedItems: cleanItems.map(item => ({
+            product_ref: item.product_ref.toUpperCase(),
+            target_weight_g_bale: Number(item.target_weight_g_bale),
+            actual_weight_g_bale: Number(item.actual_weight_g_bale),
+            bales_produced: Number(item.bales_produced)
+          })),
+          byproductsSacked: cleanByproducts.map(by => ({
+            byproduct_type: by.byproduct_type.toUpperCase(),
+            weight_kg: Number(by.weight_kg),
+            price_per_kg: Number(by.price_per_kg)
+          }))
+        })
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Failed to complete sorting transaction.');
+
+      alert(`🎉 Sorting run for ${activeSortShip.consignment_ref} processed and committed successfully!`);
+      setShowSortModal(false);
+      
+      // Reset structures safely
+      setSortedItems([{ product_ref: '', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }]);
+      setByproductsSacked([{ byproduct_type: '', weight_kg: '', price_per_kg: '' }]);
+      
+      fetchConsignments();
+    } catch (err) {
+      console.error("Sorting transaction failure:", err);
+      alert(`🚨 Error committing transaction: ${err.message}`);
+    } finally {
+      setSortLoading(false);
     }
   };
 
@@ -245,7 +344,10 @@ export default function Consignments() {
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       {ship.type === 'giant_bale' && ship.status !== 'completed' ? (
-                        <button className="bg-navy text-gold text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded hover:bg-navy/90 cursor-pointer transition-all">
+                        <button 
+                          onClick={() => { setActiveSortShip(ship); setShowSortModal(true); }}
+                          className="bg-navy text-gold text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded hover:bg-navy/90 cursor-pointer transition-all"
+                        >
                           Process Sorting Run
                         </button>
                       ) : (
@@ -259,6 +361,202 @@ export default function Consignments() {
           </div>
         )}
       </main>
+
+      {/* --- FULLY DYNAMIC RECONCILE/SORTING MODAL --- */}
+      {showSortModal && (
+        <div className="fixed inset-0 bg-navy/60 backdrop-blur-xs flex justify-center items-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded border-t-4 border-gold max-w-4xl w-full p-6 shadow-2xl animate-fadeIn text-navy my-8">
+            
+            <div className="flex justify-between items-center mb-4 pb-2 border-b border-navy/5">
+              <h3 className="font-serif text-xl font-bold flex items-center gap-2">
+                <Layers size={22} className="text-gold" /> Process Sorting Manifest: {activeSortShip?.consignment_ref}
+              </h3>
+              <button 
+                onClick={() => setShowSortModal(false)}
+                className="text-navy/60 hover:text-navy transition"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            
+            <p className="text-xs text-navy/60 mb-6">
+              Establish output metrics for this sorted Giant Bale. Adding product codes and weights dynamically updates central master stock catalogs.
+            </p>
+            
+            <form onSubmit={handleSortSubmit} className="space-y-6">
+              
+              {/* SECTION 1: DYNAMIC PACKED BALES */}
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-navy border-b-2 border-gold/40 pb-1">
+                    1. Sorted Product Bales (Units)
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={handleAddSortedItem}
+                    className="text-gold hover:text-gold/80 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                  >
+                    <Plus size={12} /> Add Item Code
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {sortedItems.map((item, index) => (
+                    <div key={index} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center bg-off-white/50 p-2 rounded border border-navy/5">
+                      <div className="md:col-span-3">
+                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Product Code</label>
+                        <input 
+                          type="text" 
+                          required
+                          placeholder="e.g., LMD, PODR"
+                          value={item.product_ref}
+                          onChange={(e) => handleSortedItemChange(index, 'product_ref', e.target.value)}
+                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider focus:outline-none focus:border-gold"
+                        />
+                      </div>
+                      
+                      <div className="md:col-span-3">
+                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Standard Size (KG)</label>
+                        <input 
+                          type="number" 
+                          required
+                          placeholder="Std KG (e.g. 55)"
+                          value={item.target_weight_g_bale}
+                          onChange={(e) => handleSortedItemChange(index, 'target_weight_g_bale', e.target.value)}
+                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-gold"
+                        />
+                      </div>
+
+                      <div className="md:col-span-3">
+                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Actual Weight (KG)</label>
+                        <input 
+                          type="number" 
+                          required
+                          placeholder="Actual KG (e.g. 50)"
+                          value={item.actual_weight_g_bale}
+                          onChange={(e) => handleSortedItemChange(index, 'actual_weight_g_bale', e.target.value)}
+                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-gold"
+                        />
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Qty Produced</label>
+                        <input 
+                          type="number" 
+                          required
+                          min="1"
+                          placeholder="Bales Count"
+                          value={item.bales_produced}
+                          onChange={(e) => handleSortedItemChange(index, 'bales_produced', e.target.value)}
+                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs font-bold focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="md:col-span-1 text-right">
+                        {sortedItems.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveSortedItem(index)}
+                            className="text-red-500 hover:text-red-700 p-1"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* SECTION 2: DYNAMIC BYPRODUCTS */}
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-navy border-b-2 border-gold/40 pb-1">
+                    2. Sacked Byproduct Yields (Loose weight)
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={handleAddByproduct}
+                    className="text-gold hover:text-gold/80 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                  >
+                    <Plus size={12} /> Add Byproduct Type
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {byproductsSacked.map((by, index) => (
+                    <div key={index} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center bg-off-white/50 p-2 rounded border border-navy/5">
+                      <div className="md:col-span-4">
+                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Byproduct Group</label>
+                        <input 
+                          type="text" 
+                          placeholder="e.g., TROUSERS, HOUSEHOLDS"
+                          value={by.byproduct_type}
+                          onChange={(e) => handleByproductChange(index, 'byproduct_type', e.target.value)}
+                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider focus:outline-none focus:border-gold"
+                        />
+                      </div>
+
+                      <div className="md:col-span-4">
+                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Total Weight (KG)</label>
+                        <input 
+                          type="number" 
+                          step="0.01"
+                          placeholder="Total weight (KG)"
+                          value={by.weight_kg}
+                          onChange={(e) => handleByproductChange(index, 'weight_kg', e.target.value)}
+                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-gold"
+                        />
+                      </div>
+
+                      <div className="md:col-span-3">
+                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Target Price / KG</label>
+                        <input 
+                          type="number" 
+                          placeholder="Selling Price per KG"
+                          value={by.price_per_kg}
+                          onChange={(e) => handleByproductChange(index, 'price_per_kg', e.target.value)}
+                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-gold"
+                        />
+                      </div>
+
+                      <div className="md:col-span-1 text-right">
+                        {byproductsSacked.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveByproduct(index)}
+                            className="text-red-500 hover:text-red-700 p-1"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* FOOTER ACTIONS */}
+              <div className="flex justify-end gap-3 pt-4 border-t border-navy/5">
+                <button 
+                  type="button" 
+                  onClick={() => setShowSortModal(false)}
+                  className="text-navy/60 hover:text-navy text-xs font-bold uppercase tracking-wider px-3 py-2 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  disabled={sortLoading}
+                  className="bg-navy text-gold hover:bg-navy/90 font-bold text-xs uppercase tracking-wider px-6 py-2.5 rounded transition flex items-center gap-2 cursor-pointer shadow-md"
+                >
+                  {sortLoading ? <Loader2 className="animate-spin" size={14} /> : "Write to Database"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );

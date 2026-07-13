@@ -37,50 +37,72 @@ export const getConsignments = async (req, res) => {
   }
 };
 
-// @desc    Process a Giant Bale breakdown into standard bales and by-product weights
+// @desc    Process a Giant Bale breakdown into standard/adjusted bales and by-product weights
 // @route   POST /api/consignments/:id/process
 export const processGiantBale = async (req, res) => {
   try {
     const { id } = req.params;
-    const { cleanBales, byproductKgs } = req.body; 
-    // cleanBales sample structure: [{ itemCode: 'LMD', actual_size: 55, quantity_produced: 12, base_price: 150, adj_price: 150 }]
+    const { sortedItems, byproductsSacked } = req.body; 
+    // sortedItems structure: [{ product_ref: 'LMD', target_weight_g_bale: 55, actual_weight_g_bale: 50, bales_produced: 1 }]
+    // byproductsSacked structure: [{ byproduct_type: 'TROUSERS', weight_kg: 120.5, price_per_kg: 450 }]
 
     const consignment = await Consignment.findById(id);
     if (!consignment) return res.status(404).json({ message: 'Consignment tracking profile not found.' });
     if (consignment.type !== 'giant_bale') return res.status(400).json({ message: 'Only Giant Bale allocations require sorting processing.' });
 
-    let totalBalesCount = 0;
+    // 1. Map sortedItems array directly to Consignment Schema structure
+    consignment.processing_run.sorted_items = sortedItems.map(item => ({
+      product_ref: item.product_ref.toUpperCase(),
+      target_weight_g_bale: Number(item.target_weight_g_bale),
+      actual_weight_g_bale: Number(item.actual_weight_g_bale),
+      bales_produced: Number(item.bales_produced)
+    }));
 
-    // 1. Loop through each sorted cleanly packed wholesale type and update master variation entries
-    for (const bale of cleanBales) {
-      const product = await ProductItem.findOne({ itemCode: bale.itemCode.toUpperCase() });
+    // 2. Map byproductsSacked array directly to Consignment Schema structure
+    if (byproductsSacked && byproductsSacked.length > 0) {
+      consignment.processing_run.byproducts_sacked = byproductsSacked.map(by => ({
+        byproduct_type: by.byproduct_type.toUpperCase(),
+        weight_kg: Number(by.weight_kg),
+        price_per_kg: Number(by.price_per_kg)
+      }));
+    }
+
+    // 3. Loop through each sorted bale group and update ProductItem master variation list
+    for (const item of sortedItems) {
+      const product = await ProductItem.findOne({ itemCode: item.product_ref.toUpperCase() });
       if (product) {
+        // Calculate dynamic adjusted prices if they aren't directly provided by the frontend
+        const basePrice = product.basePrice || 0; // fallback to product's default standard price
+        const targetWeight = Number(item.target_weight_g_bale);
+        const actualWeight = Number(item.actual_weight_g_bale);
+        
+        // Auto-pricing formula: (basePrice / targetWeight) * actualWeight
+        const calculatedAdjPrice = actualWeight === targetWeight 
+          ? basePrice 
+          : Math.round((basePrice / targetWeight) * actualWeight);
+
         product.stock_variations.push({
-          production_ref: `${consignment.consignment_ref}-${bale.itemCode.toUpperCase()}`,
+          production_ref: `${consignment.consignment_ref}-${item.product_ref.toUpperCase()}-${actualWeight}KG`,
           consignment_id: consignment._id,
-          actual_size: bale.actual_size,
-          size_type: bale.actual_size === product.standardSize ? 'standard' : 'adjusted',
-          quantity_produced: bale.quantity_produced,
-          base_price: bale.base_price,
-          adj_price: bale.adj_price
+          actual_size: actualWeight,
+          size_type: actualWeight === targetWeight ? 'standard' : 'adjusted',
+          quantity_produced: Number(item.bales_produced),
+          base_price: basePrice,
+          adj_price: calculatedAdjPrice
         });
+        
         await product.save();
-        totalBalesCount += bale.quantity_produced;
       }
     }
 
-    // 2. Log by-product weight structures into database layers if present
-    if (byproductKgs > 0) {
-      // NOTE: Here we can trigger an injection into your byproduct model if needed
-      consignment.processing_run.byproducts_kgs = byproductKgs;
-    }
-
-    // 3. Finalize consignment manifest state
+    // 4. Finalize consignment status
     consignment.status = 'completed';
-    consignment.processing_run.bales_produced = totalBalesCount;
     await consignment.save();
 
-    res.status(200).json({ message: 'Giant bale breakdown processed, stock fields appended seamlessly.', consignment });
+    res.status(200).json({ 
+      message: 'Giant bale breakdown processed and dynamic inventory variations generated seamlessly.', 
+      consignment 
+    });
   } catch (error) {
     res.status(500).json({ message: 'Error breaking down giant bale allocation', error: error.message });
   }

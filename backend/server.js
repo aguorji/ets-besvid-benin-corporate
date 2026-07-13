@@ -28,6 +28,11 @@ app.use(cors({
   optionsSuccessStatus: 200
 }));
 
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} request to ${req.url}`);
+  next();
+});
+
 // MOUNT ROUTES HERE (Directly below middleware configurations)
 app.use('/api/auth', authRoutes);
 app.use('/api/consignments', consignmentRoutes);

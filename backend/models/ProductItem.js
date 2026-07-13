@@ -21,6 +21,9 @@ const ProductItemSchema = new mongoose.Schema({
   description: { type: String, required: true, trim: true },
   unit: { type: String, enum: ['KGS', 'PCS'], default: 'KGS' },
   standardSize: { type: Number, required: true },
+  
+  // ADD THIS FIELD TO HOLD THE MASTER PRICE OF A STANDARD BALE
+  basePrice: { type: Number, required: true, default: 0 }, 
 
   stock_variations: [VariationSchema]
 }, { timestamps: true });

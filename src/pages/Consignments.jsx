@@ -5,6 +5,9 @@ export default function Consignments() {
   const [consignments, setConsignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  
+  // Master Product Catalog state for unit lookups
+  const [availableProducts, setAvailableProducts] = useState([]);
 
   // Form Display and Input States
   const [showAddForm, setShowAddForm] = useState(false);
@@ -18,38 +21,45 @@ export default function Consignments() {
   const [submitLoading, setSubmitLoading] = useState(false);
   const [formMessage, setFormMessage] = useState({ type: '', text: '' });
 
-  // --- DYNAMIC SORTING MODAL STATES ---
+  // --- SORTING MODAL STATES ---
   const [showSortModal, setShowSortModal] = useState(false);
   const [activeSortShip, setActiveSortShip] = useState(null);
   
-  // Houses our fully dynamic arrays matching our backend expectations
+  // Added "unit" field directly to the row schema
   const [sortedItems, setSortedItems] = useState([
-    { product_ref: '', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }
+    { product_ref: '', unit: 'KGS', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }
   ]);
   const [byproductsSacked, setByproductsSacked] = useState([
     { byproduct_type: '', weight_kg: '', price_per_kg: '' }
   ]);
   const [sortLoading, setSortLoading] = useState(false);
 
-  // Data Fetching Pipeline
-  const fetchConsignments = async () => {
+  // Fetch both Consignments and Master Products
+  const fetchData = async () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch('/api/consignments');
-      if (!response.ok) throw new Error(`Server returned status: ${response.status}`);
-      const data = await response.json();
-      setConsignments(data);
+      
+      const consResponse = await fetch('/api/consignments');
+      if (!consResponse.ok) throw new Error(`Consignments server returned status: ${consResponse.status}`);
+      const consData = await consResponse.json();
+      setConsignments(consData);
+
+      const prodResponse = await fetch('/api/products'); 
+      if (prodResponse.ok) {
+        const prodData = await prodResponse.json();
+        setAvailableProducts(prodData);
+      }
     } catch (err) {
-      console.error("Manifest retrieval failure:", err);
-      setError("Unable to sync with live consignment profiles. Verify backend server connectivity.");
+      console.error("Data synchronization failure:", err);
+      setError("Unable to sync live profiles. Verify backend server connectivity.");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchConsignments();
+    fetchData();
   }, []);
 
   const handleInputChange = (e) => {
@@ -59,17 +69,30 @@ export default function Consignments() {
 
   // --- DYNAMIC HANDLERS FOR SORTED BALES ---
   const handleAddSortedItem = () => {
-    setSortedItems(prev => [...prev, { product_ref: '', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }]);
+    setSortedItems(prev => [...prev, { product_ref: '', unit: 'KGS', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }]);
   };
 
   const handleRemoveSortedItem = (index) => {
     setSortedItems(prev => prev.filter((_, i) => i !== index));
   };
 
+  // Upgraded handler to auto-select unit from database on item code change, while keeping it manually editable
   const handleSortedItemChange = (index, field, value) => {
     setSortedItems(prev => {
       const updated = [...prev];
       updated[index][field] = value;
+
+      // If they just changed the product code, look up its master unit and apply it as the default selection
+      if (field === 'product_ref') {
+        const match = availableProducts.find(
+          (p) => p.itemCode?.toUpperCase() === value.trim().toUpperCase()
+        );
+        if (match?.unit) {
+          updated[index]['unit'] = match.unit.toUpperCase();
+          updated[index]['target_weight_g_bale'] = match.standardSize || 55;
+          updated[index]['actual_weight_g_bale'] = match.standardSize || 55;
+        }
+      }
       return updated;
     });
   };
@@ -102,8 +125,8 @@ export default function Consignments() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
-          total_landing_cost: Number(formData.total_landing_cost),
-          total_raw_weight: formData.type === 'giant_bale' ? Number(formData.total_raw_weight) : 0
+          total_landing_cost: Number(formData.total_landing_cost) || 0,
+          total_raw_weight: formData.type === 'giant_bale' ? (Number(formData.total_raw_weight) || 0) : 0
         })
       });
 
@@ -112,7 +135,7 @@ export default function Consignments() {
 
       setFormMessage({ type: 'success', text: `Consignment '${formData.consignment_ref.toUpperCase()}' registered successfully.` });
       setFormData({ consignment_ref: '', type: 'direct_container', total_landing_cost: '', total_raw_weight: '', notes: '' });
-      fetchConsignments();
+      fetchData();
     } catch (err) {
       setFormMessage({ type: 'error', text: err.message });
     } finally {
@@ -120,11 +143,10 @@ export default function Consignments() {
     }
   };
 
-  // --- DYNAMIC SORTING TRANSACTION SUBMISSION ---
+  // --- SORTING TRANSACTION SUBMISSION ---
   const handleSortSubmit = async (e) => {
     e.preventDefault();
     
-    // Filter out empty rows to avoid bad database submissions
     const cleanItems = sortedItems.filter(item => item.product_ref.trim() !== '');
     const cleanByproducts = byproductsSacked.filter(by => by.byproduct_type.trim() !== '');
 
@@ -141,14 +163,15 @@ export default function Consignments() {
         body: JSON.stringify({
           sortedItems: cleanItems.map(item => ({
             product_ref: item.product_ref.toUpperCase(),
-            target_weight_g_bale: Number(item.target_weight_g_bale),
-            actual_weight_g_bale: Number(item.actual_weight_g_bale),
-            bales_produced: Number(item.bales_produced)
+            target_weight_g_bale: Number(item.target_weight_g_bale) || 0,
+            actual_weight_g_bale: Number(item.actual_weight_g_bale) || 0,
+            bales_produced: Number(item.bales_produced) || 0,
+            unit: item.unit // sent to backend in case master updates are processed
           })),
           byproductsSacked: cleanByproducts.map(by => ({
             byproduct_type: by.byproduct_type.toUpperCase(),
-            weight_kg: Number(by.weight_kg),
-            price_per_kg: Number(by.price_per_kg)
+            weight_kg: Number(by.weight_kg) || 0,
+            price_per_kg: Number(by.price_per_kg) || 0
           }))
         })
       });
@@ -159,11 +182,10 @@ export default function Consignments() {
       alert(`🎉 Sorting run for ${activeSortShip.consignment_ref} processed and committed successfully!`);
       setShowSortModal(false);
       
-      // Reset structures safely
-      setSortedItems([{ product_ref: '', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }]);
+      setSortedItems([{ product_ref: '', unit: 'KGS', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }]);
       setByproductsSacked([{ byproduct_type: '', weight_kg: '', price_per_kg: '' }]);
       
-      fetchConsignments();
+      fetchData();
     } catch (err) {
       console.error("Sorting transaction failure:", err);
       alert(`🚨 Error committing transaction: ${err.message}`);
@@ -334,9 +356,9 @@ export default function Consignments() {
                       </span>
                     </td>
                     <td className="py-3.5 px-4 font-bold">
-                      {ship.total_landing_cost.toLocaleString()}
+                      {ship.total_landing_cost?.toLocaleString() || 0}
                     </td>
-                    <td className="py-3.5 px-4 text-navy/60">{new Date(ship.arrival_date).toLocaleDateString()}</td>
+                    <td className="py-3.5 px-4 text-navy/60">{ship.arrival_date ? new Date(ship.arrival_date).toLocaleDateString() : 'N/A'}</td>
                     <td className="py-3.5 px-4 uppercase text-[10px]">
                       <span className={`font-bold ${ship.status === 'completed' ? 'text-green-600' : 'text-amber-600'}`}>
                         ● {ship.status}
@@ -362,7 +384,7 @@ export default function Consignments() {
         )}
       </main>
 
-      {/* --- FULLY DYNAMIC RECONCILE/SORTING MODAL --- */}
+      {/* --- SORTING MODAL WITH INTERACTIVE UNITS --- */}
       {showSortModal && (
         <div className="fixed inset-0 bg-navy/60 backdrop-blur-xs flex justify-center items-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded border-t-4 border-gold max-w-4xl w-full p-6 shadow-2xl animate-fadeIn text-navy my-8">
@@ -373,7 +395,7 @@ export default function Consignments() {
               </h3>
               <button 
                 onClick={() => setShowSortModal(false)}
-                className="text-navy/60 hover:text-navy transition"
+                className="text-navy/60 hover:text-navy transition border-none bg-transparent cursor-pointer"
               >
                 <X size={20} />
               </button>
@@ -394,77 +416,120 @@ export default function Consignments() {
                   <button
                     type="button"
                     onClick={handleAddSortedItem}
-                    className="text-gold hover:text-gold/80 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                    className="text-gold hover:text-gold/80 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 border-none bg-transparent cursor-pointer"
                   >
                     <Plus size={12} /> Add Item Code
                   </button>
                 </div>
 
+                {/* DESKTOP TABLE HEADER */}
+                <div className="hidden md:grid grid-cols-12 gap-2 px-2 pb-2 border-b border-navy/10 mb-2">
+                  <div className="col-span-3 text-[10px] font-bold uppercase tracking-wider text-navy/60">Item (Product Code)</div>
+                  <div className="col-span-3 text-[10px] font-bold uppercase tracking-wider text-navy/60">Standard Size</div>
+                  <div className="col-span-3 text-[10px] font-bold uppercase tracking-wider text-navy/60">Actual Size</div>
+                  <div className="col-span-2 text-[10px] font-bold uppercase tracking-wider text-navy/60">Bales Produced</div>
+                  <div className="col-span-1"></div>
+                </div>
+
                 <div className="space-y-3">
-                  {sortedItems.map((item, index) => (
-                    <div key={index} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center bg-off-white/50 p-2 rounded border border-navy/5">
-                      <div className="md:col-span-3">
-                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Product Code</label>
-                        <input 
-                          type="text" 
-                          required
-                          placeholder="e.g., LMD, PODR"
-                          value={item.product_ref}
-                          onChange={(e) => handleSortedItemChange(index, 'product_ref', e.target.value)}
-                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider focus:outline-none focus:border-gold"
-                        />
-                      </div>
-                      
-                      <div className="md:col-span-3">
-                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Standard Size (KG)</label>
-                        <input 
-                          type="number" 
-                          required
-                          placeholder="Std KG (e.g. 55)"
-                          value={item.target_weight_g_bale}
-                          onChange={(e) => handleSortedItemChange(index, 'target_weight_g_bale', e.target.value)}
-                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-gold"
-                        />
-                      </div>
+                  {sortedItems.map((item, index) => {
+                    return (
+                      <div key={index} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center bg-off-white/50 p-2 rounded border border-navy/5">
+                        
+                        {/* 1. Item Code Input */}
+                        <div className="md:col-span-3">
+                          <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Item (Product Code)</label>
+                          <input 
+                            type="text" 
+                            required
+                            placeholder="e.g., LMD, PODR"
+                            value={item.product_ref}
+                            onChange={(e) => handleSortedItemChange(index, 'product_ref', e.target.value)}
+                            className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider focus:outline-none focus:border-gold"
+                          />
+                        </div>
+                        
+                        {/* 2. Standard Size Input with Unit Selector Dropdown */}
+                        <div className="md:col-span-3">
+                          <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Standard Size</label>
+                          <div className="relative flex items-center">
+                            <input 
+                              type="number" 
+                              required
+                              placeholder="Standard size"
+                              value={item.target_weight_g_bale}
+                              onChange={(e) => handleSortedItemChange(index, 'target_weight_g_bale', e.target.value)}
+                              className="w-full bg-white border border-navy/10 rounded pl-2.5 pr-14 py-1.5 text-xs focus:outline-none focus:border-gold"
+                            />
+                            {/* UPGRADED: Intersecting Unit Override Dropdown Selector */}
+                            <select
+                              value={item.unit}
+                              onChange={(e) => handleSortedItemChange(index, 'unit', e.target.value)}
+                              className="absolute right-1 text-[9px] font-extrabold uppercase tracking-wider text-gold bg-navy hover:bg-navy/90 border-none rounded px-1.5 py-0.5 outline-none cursor-pointer"
+                            >
+                              <option value="KGS">KG</option>
+                              <option value="PCS">PCS</option>
+                            </select>
+                          </div>
+                        </div>
 
-                      <div className="md:col-span-3">
-                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Actual Weight (KG)</label>
-                        <input 
-                          type="number" 
-                          required
-                          placeholder="Actual KG (e.g. 50)"
-                          value={item.actual_weight_g_bale}
-                          onChange={(e) => handleSortedItemChange(index, 'actual_weight_g_bale', e.target.value)}
-                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-gold"
-                        />
-                      </div>
+                        {/* 3. Actual Size Input with Linked Unit Selector */}
+                        <div className="md:col-span-3">
+                          <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Actual Size</label>
+                          <div className="relative flex items-center">
+                            <input 
+                              type="number" 
+                              required
+                              placeholder="Actual size"
+                              value={item.actual_weight_g_bale}
+                              onChange={(e) => handleSortedItemChange(index, 'actual_weight_g_bale', e.target.value)}
+                              className="w-full bg-white border border-navy/10 rounded pl-2.5 pr-14 py-1.5 text-xs focus:outline-none focus:border-gold"
+                            />
+                            {/* Secondary Unit selector to match inputs easily */}
+                            <select
+                              value={item.unit}
+                              onChange={(e) => handleSortedItemChange(index, 'unit', e.target.value)}
+                              className="absolute right-1 text-[9px] font-extrabold uppercase tracking-wider text-gold bg-navy hover:bg-navy/90 border-none rounded px-1.5 py-0.5 outline-none cursor-pointer"
+                            >
+                              <option value="KGS">KG</option>
+                              <option value="PCS">PCS</option>
+                            </select>
+                          </div>
+                        </div>
 
-                      <div className="md:col-span-2">
-                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Qty Produced</label>
-                        <input 
-                          type="number" 
-                          required
-                          min="1"
-                          placeholder="Bales Count"
-                          value={item.bales_produced}
-                          onChange={(e) => handleSortedItemChange(index, 'bales_produced', e.target.value)}
-                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs font-bold focus:outline-none"
-                        />
-                      </div>
+                        {/* 4. Number of Units/Bales */}
+                        <div className="md:col-span-2">
+                          <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Bales Produced</label>
+                          <div className="relative flex items-center">
+                            <input 
+                              type="number" 
+                              required
+                              min="1"
+                              placeholder="Qty"
+                              value={item.bales_produced}
+                              onChange={(e) => handleSortedItemChange(index, 'bales_produced', e.target.value)}
+                              className="w-full bg-white border border-navy/10 rounded pl-2.5 pr-12 py-1.5 text-xs font-bold focus:outline-none"
+                            />
+                            <span className="absolute right-2.5 text-[8px] font-extrabold uppercase text-navy/40">
+                              {item.unit === 'PCS' ? 'UNITS' : 'BALES'}
+                            </span>
+                          </div>
+                        </div>
 
-                      <div className="md:col-span-1 text-right">
-                        {sortedItems.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveSortedItem(index)}
-                            className="text-red-500 hover:text-red-700 p-1"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        )}
+                        <div className="md:col-span-1 text-right">
+                          {sortedItems.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSortedItem(index)}
+                              className="text-red-500 hover:text-red-700 p-1 border-none bg-transparent cursor-pointer"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -477,7 +542,7 @@ export default function Consignments() {
                   <button
                     type="button"
                     onClick={handleAddByproduct}
-                    className="text-gold hover:text-gold/80 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1"
+                    className="text-gold hover:text-gold/80 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 border-none bg-transparent cursor-pointer"
                   >
                     <Plus size={12} /> Add Byproduct Type
                   </button>
@@ -525,7 +590,7 @@ export default function Consignments() {
                           <button
                             type="button"
                             onClick={() => handleRemoveByproduct(index)}
-                            className="text-red-500 hover:text-red-700 p-1"
+                            className="text-red-500 hover:text-red-700 p-1 border-none bg-transparent cursor-pointer"
                           >
                             <Trash2 size={14} />
                           </button>
@@ -541,14 +606,14 @@ export default function Consignments() {
                 <button 
                   type="button" 
                   onClick={() => setShowSortModal(false)}
-                  className="text-navy/60 hover:text-navy text-xs font-bold uppercase tracking-wider px-3 py-2 cursor-pointer"
+                  className="text-navy/60 hover:text-navy text-xs font-bold uppercase tracking-wider px-3 py-2 cursor-pointer border-none bg-transparent"
                 >
                   Cancel
                 </button>
                 <button 
                   type="submit" 
                   disabled={sortLoading}
-                  className="bg-navy text-gold hover:bg-navy/90 font-bold text-xs uppercase tracking-wider px-6 py-2.5 rounded transition flex items-center gap-2 cursor-pointer shadow-md"
+                  className="bg-navy text-gold hover:bg-navy/90 font-bold text-xs uppercase tracking-wider px-6 py-2.5 rounded transition flex items-center gap-2 cursor-pointer shadow-md border-none"
                 >
                   {sortLoading ? <Loader2 className="animate-spin" size={14} /> : "Write to Database"}
                 </button>

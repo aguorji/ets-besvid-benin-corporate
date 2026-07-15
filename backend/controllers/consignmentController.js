@@ -77,9 +77,7 @@ export const processGiantBale = async (req, res) => {
         const actualWeight = Number(item.actual_weight_g_bale);
         
         // Auto-pricing formula: (basePrice / targetWeight) * actualWeight
-        const calculatedAdjPrice = actualWeight === targetWeight 
-          ? basePrice 
-          : Math.round((basePrice / targetWeight) * actualWeight);
+        const calculatedAdjPrice = (actualWeight === targetWeight || targetWeight === 0) ? basePrice : Math.round((basePrice / targetWeight) * actualWeight);
 
         product.stock_variations.push({
           production_ref: `${consignment.consignment_ref}-${item.product_ref.toUpperCase()}-${actualWeight}KG`,

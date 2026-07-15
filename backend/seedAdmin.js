@@ -1,25 +1,12 @@
 import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
+import User from './models/User.js'; // Ensure this path is correct relative to seedAdmin.js
 
-// Load environment configurations
 dotenv.config();
-
-const userSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-  role: { type: String, enum: ['admin', 'manager', 'staff'], default: 'staff' }
-});
-
-// Avoid re-compiling the model if it already exists
-const User = mongoose.models.User || mongoose.model('User', userSchema);
 
 async function seed() {
   try {
-    // Dynamically pull your working direct connection string from your .env file
     const uri = process.env.MONGO_URI;
-
     if (!uri) {
       console.error("🚨 Error: MONGO_URI is missing from your .env file!");
       process.exit(1);
@@ -29,26 +16,24 @@ async function seed() {
     await mongoose.connect(uri);
     console.log("🔗 Connected successfully!");
 
-    // Search for the admin using the correct variable name
+    // Search for existing admin
     const adminUser = await User.findOne({ email: 'admin@etsbesvid.com' });
 
     if (adminUser) {
       console.log('🔄 Administrator exists. Updating password to ensure sync...');
-      const salt = await bcrypt.genSalt(10);
-      adminUser.password = await bcrypt.hash('SecureAdmin2026!', salt);
+      // Pass PLAIN TEXT. The model's pre-save middleware will automatically hash it!
+      adminUser.password = 'SecureAdmin2026!'; 
       await adminUser.save();
       console.log('✔️ Password updated successfully to SecureAdmin2026!');
       process.exit(0);
     }
 
-    // If admin doesn't exist at all, create a new one
     console.log('🆕 Administrator not found. Creating a fresh root account...');
-    const hashedPassword = await bcrypt.hash('SecureAdmin2026!', 12);
-
+    // Pass PLAIN TEXT. The model's pre-save middleware will automatically hash it!
     await User.create({
       name: "Managing Director",
       email: "admin@etsbesvid.com",
-      password: hashedPassword,
+      password: "SecureAdmin2026!", 
       role: "admin"
     });
 

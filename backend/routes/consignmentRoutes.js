@@ -1,5 +1,10 @@
 import express from 'express';
-import { registerConsignment, getConsignments, processGiantBale } from '../controllers/consignmentController.js';
+import { 
+  registerConsignment, 
+  getConsignments, 
+  processGiantBale,
+  updateProcessedGiantBale // 1. Added the new admin update controller here
+} from '../controllers/consignmentController.js';
 
 const router = express.Router();
 
@@ -8,6 +13,7 @@ router.route('/')
   .get(getConsignments);
 
 router.route('/:id/process')
-  .post(processGiantBale);
+  .post(processGiantBale)
+  .put(updateProcessedGiantBale); // 2. Chained the PUT route right here for clean consistency
 
 export default router;

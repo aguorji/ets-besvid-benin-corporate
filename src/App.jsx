@@ -17,44 +17,8 @@ import Team from './pages/Team';
 import Login from './pages/Login';
 import Consignments from './pages/Consignments';
 
-// Temporary Mock Dashboard View
-const Dashboard = () => {
-  const navigate = useNavigate();
-  const { logout } = useAuth(); // 👈 Tap directly into our global auth controller
-
-  return (
-    <div className="p-8 max-w-4xl mx-auto space-y-6">
-      <div className="flex justify-between items-center border-b pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">ETS Besvid Corporate Dashboard</h1>
-          <p className="text-sm text-gray-600 mt-1">Secure Multi-Currency Management Console Active.</p>
-        </div>
-        <button 
-          onClick={logout} // 👈 Clean, automated session teardown handler
-          className="bg-red-600 text-white text-xs px-4 py-2 rounded font-bold uppercase tracking-wider cursor-pointer border-none hover:bg-red-700 transition-colors"
-        >
-          Secure Disconnect / Logout
-        </button>
-      </div>
-
-      {/* Internal Management Control Links */}
-      <div className="bg-white border border-gray-200 rounded p-4 flex gap-4 shadow-sm">
-        <button 
-          onClick={() => navigate('/dashboard')} 
-          className="bg-navy text-white text-xs font-bold uppercase tracking-wider px-4 py-2.5 rounded cursor-pointer border-none"
-        >
-          Overview Console
-        </button>
-        <button 
-          onClick={() => navigate('/consignments')} 
-          className="bg-gold text-navy text-xs font-bold uppercase tracking-wider px-4 py-2.5 rounded cursor-pointer border-none"
-        >
-          Manage Shipments & Arrivals
-        </button>
-      </div>
-    </div>
-  );
-};
+  // Add this import near your other page components in src/App.jsx:
+import Dashboard from './pages/Dashboard';
 
 /**
  * 🛡️ Security Gatekeeper Wrapper (Upgraded to contextual evaluation)

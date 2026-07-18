@@ -12,18 +12,18 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const initializeAuth = async () => {
       const token = localStorage.getItem('ets_token');
-      if (token) {
+      const storedUser = localStorage.getItem('ets_user');
+      
+      if (token && storedUser && storedUser !== "undefined") {
         try {
-          // Verify token validity against a profile/me checkpoint if available
-          // For now, we assume the token is active if present
-          const storedUser = localStorage.getItem('ets_user');
-          if (storedUser) {
-            setUser(JSON.parse(storedUser));
-          }
+          setUser(JSON.parse(storedUser));
         } catch (error) {
           localStorage.removeItem('ets_token');
           localStorage.removeItem('ets_user');
         }
+      } else if (storedUser === "undefined") {
+        localStorage.removeItem('ets_token');
+        localStorage.removeItem('ets_user');
       }
       setLoading(false);
     };
@@ -33,13 +33,15 @@ export const AuthProvider = ({ children }) => {
 
   /**
    * Handles user authentication submission.
-   * @param {string} email 
-   * @param {string} password 
    */
   const login = async (email, password) => {
     try {
       const response = await apiClient.post('/auth/login', { email, password });
-      const { token, user: userData } = response.data;
+      const { token, ...userData } = response.data;
+
+      if (!token) {
+        throw new Error("No token returned from server structure.");
+      }
 
       localStorage.setItem('ets_token', token);
       localStorage.setItem('ets_user', JSON.stringify(userData));

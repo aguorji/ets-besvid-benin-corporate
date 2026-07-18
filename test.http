@@ -1,0 +1,27 @@
+### Test Admin Correction (PUT)
+PUT http://localhost:5000/api/consignments/6a5804ec39b2b37eacc5b632/process
+Content-Type: application/json
+
+{
+  "sortedItems": [
+    {
+      "product_ref": "LMD",
+      "target_weight_g_bale": 55,
+      "actual_weight_g_bale": 52,
+      "bales_produced": 12
+    },
+    {
+      "product_ref": "MCSH",
+      "target_weight_g_bale": 400,
+      "actual_weight_g_bale": 395,
+      "bales_produced": 5
+    }
+  ],
+  "byproductsSacked": [
+    {
+      "byproduct_type": "TROUSERS",
+      "weight_kg": 150,
+      "price_per_kg": 450
+    }
+  ]
+}

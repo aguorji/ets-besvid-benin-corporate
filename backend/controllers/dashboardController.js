@@ -1,3 +1,4 @@
+// backend/controllers/dashboardController.js
 import Sale from '../models/Sale.js';
 import Expense from '../models/Expense.js';
 import Byproduct from '../models/Byproduct.js';
@@ -45,7 +46,7 @@ export const getDashboardSummary = async (req, res) => {
       {
         $group: {
           _id: null,
-          totalConsignmentCost: { $sum: '$cost_pool.total_consignment_cost' }
+          totalConsignmentCost: { $sum: '$total_landing_cost' } // 👈 FIX: Direct root path reference
         }
       }
     ]);
@@ -81,6 +82,7 @@ export const getDashboardSummary = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error("Dashboard compilation crash:", error.message); // Helpful for logging errors in dev
     res.status(500).json({ error: "Failed to compile financial dashboard metrics." });
   }
 };

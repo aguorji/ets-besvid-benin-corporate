@@ -1,4 +1,5 @@
 // backend/controllers/consignmentController.js
+import mongoose from 'mongoose'; // 👈 IMPORT MONGOOSE FOR TRANSACTIONS
 import Consignment from '../models/Consignment.js';
 import ProductItem from '../models/ProductItem.js';
 
@@ -32,13 +33,6 @@ export const registerConsignment = async (req, res) => {
 export const getConsignments = async (req, res) => {
   try {
     const shipments = await Consignment.find({}).sort({ arrival_date: -1 });
-
-    // 👇 ADDED THIS TEMPORARY PRINT LOG TO FIND YOUR EXACT ID IN CURSOR TERMINAL:
-    const giantBales = shipments.filter(c => c.type === 'giant_bale');
-    console.log("\n=== COPY YOUR TEST MONGO ID BELOW ===");
-    console.log(giantBales.map(c => ({ id: c._id, ref: c.consignment_ref, status: c.status })));
-    console.log("=====================================\n");
-
     res.status(200).json(shipments);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching consignment manifests', error: error.message });
@@ -48,17 +42,27 @@ export const getConsignments = async (req, res) => {
 // @desc    Process a Giant Bale breakdown into standard/adjusted bales and by-product weights
 // @route   POST /api/consignments/:id/process
 export const processGiantBale = async (req, res) => {
+  // START TRANSACTION SESSION
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { id } = req.params;
     const { sortedItems, byproductsSacked } = req.body; 
-    // sortedItems structure: [{ product_ref: 'LMD', target_weight_g_bale: 55, actual_weight_g_bale: 50, bales_produced: 1 }]
-    // byproductsSacked structure: [{ byproduct_type: 'TROUSERS', weight_kg: 120.5, price_per_kg: 450 }]
 
-    const consignment = await Consignment.findById(id);
-    if (!consignment) return res.status(404).json({ message: 'Consignment tracking profile not found.' });
-    if (consignment.type !== 'giant_bale') return res.status(400).json({ message: 'Only Giant Bale allocations require sorting processing.' });
+    // Pass the session to the query
+    const consignment = await Consignment.findById(id).session(session);
+    if (!consignment) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: 'Consignment tracking profile not found.' });
+    }
+    if (consignment.type !== 'giant_bale') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: 'Only Giant Bale allocations require sorting processing.' });
+    }
 
-    // 1. Map sortedItems array directly to Consignment Schema structure
     consignment.processing_run.sorted_items = sortedItems.map(item => ({
       product_ref: item.product_ref.toUpperCase(),
       target_weight_g_bale: Number(item.target_weight_g_bale),
@@ -66,7 +70,6 @@ export const processGiantBale = async (req, res) => {
       bales_produced: Number(item.bales_produced)
     }));
 
-    // 2. Map byproductsSacked array directly to Consignment Schema structure
     if (byproductsSacked && byproductsSacked.length > 0) {
       consignment.processing_run.byproducts_sacked = byproductsSacked.map(by => ({
         byproduct_type: by.byproduct_type.toUpperCase(),
@@ -75,17 +78,17 @@ export const processGiantBale = async (req, res) => {
       }));
     }
 
-    // 3. Loop through each sorted bale group and update ProductItem master variation list
     for (const item of sortedItems) {
-      const product = await ProductItem.findOne({ itemCode: item.product_ref.toUpperCase() });
+      // Pass the session to the query
+      const product = await ProductItem.findOne({ itemCode: item.product_ref.toUpperCase() }).session(session);
       if (product) {
-        // Calculate dynamic adjusted prices if they aren't directly provided by the frontend
-        const basePrice = product.basePrice || 0; // fallback to product's default standard price
+        const basePrice = product.basePrice || 0; 
         const targetWeight = Number(item.target_weight_g_bale);
         const actualWeight = Number(item.actual_weight_g_bale);
         
-        // Auto-pricing formula: (basePrice / targetWeight) * actualWeight
-        const calculatedAdjPrice = (actualWeight === targetWeight || targetWeight === 0) ? basePrice : Math.round((basePrice / targetWeight) * actualWeight);
+        const calculatedAdjPrice = (actualWeight === targetWeight || targetWeight === 0) 
+          ? basePrice 
+          : Math.round((basePrice / targetWeight) * actualWeight);
 
         product.stock_variations.push({
           production_ref: `${consignment.consignment_ref}-${item.product_ref.toUpperCase()}-${actualWeight}KG`,
@@ -97,19 +100,27 @@ export const processGiantBale = async (req, res) => {
           adj_price: calculatedAdjPrice
         });
         
-        await product.save();
+        // Pass the session to the save action
+        await product.save({ session });
       }
     }
 
-    // 4. Finalize consignment status
     consignment.status = 'completed';
-    await consignment.save();
+    // Pass the session to the save action
+    await consignment.save({ session });
+
+    // COMMIT ALL TRANSACTIONS SIMULTANEOUSLY
+    await session.commitTransaction();
+    session.endSession();
 
     res.status(200).json({ 
       message: 'Giant bale breakdown processed and dynamic inventory variations generated seamlessly.', 
       consignment 
     });
   } catch (error) {
+    // IF ANYTHING FAILS, ROLLBACK ALL CHANGES
+    await session.abortTransaction();
+    session.endSession();
     res.status(500).json({ message: 'Error breaking down giant bale allocation', error: error.message });
   }
 };
@@ -117,22 +128,35 @@ export const processGiantBale = async (req, res) => {
 // @desc    Admin correction to adjust an already completed giant bale sorting run and recalculate inventory variations
 // @route   PUT /api/consignments/:id/process
 export const updateProcessedGiantBale = async (req, res) => {
+  // START TRANSACTION SESSION
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { id } = req.params;
     const { sortedItems, byproductsSacked } = req.body;
 
-    const consignment = await Consignment.findById(id);
-    if (!consignment) return res.status(404).json({ message: 'Consignment tracking profile not found.' });
-    if (consignment.type !== 'giant_bale') return res.status(400).json({ message: 'Only Giant Bale allocations have sorting logs.' });
+    // Pass the session to the query
+    const consignment = await Consignment.findById(id).session(session);
+    if (!consignment) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: 'Consignment tracking profile not found.' });
+    }
+    if (consignment.type !== 'giant_bale') {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ message: 'Only Giant Bale allocations have sorting logs.' });
+    }
 
     // --- STEP A: REVERSE INVENTORY FROM PREVIOUS RUN ---
     for (const oldItem of consignment.processing_run.sorted_items) {
-      const product = await ProductItem.findOne({ itemCode: oldItem.product_ref });
+      const product = await ProductItem.findOne({ itemCode: oldItem.product_ref }).session(session);
       if (product) {
         product.stock_variations = product.stock_variations.filter(
           v => v.consignment_id.toString() !== consignment._id.toString()
         );
-        await product.save();
+        await product.save({ session });
       }
     }
 
@@ -156,7 +180,7 @@ export const updateProcessedGiantBale = async (req, res) => {
 
     // --- STEP C: CALCULATE NEW VARIATIONS AND APPLY STOCK ---
     for (const item of sortedItems) {
-      const product = await ProductItem.findOne({ itemCode: item.product_ref.toUpperCase() });
+      const product = await ProductItem.findOne({ itemCode: item.product_ref.toUpperCase() }).session(session);
       if (product) {
         const basePrice = product.basePrice || 0;
         const targetWeight = Number(item.target_weight_g_bale);
@@ -176,17 +200,24 @@ export const updateProcessedGiantBale = async (req, res) => {
           adj_price: calculatedAdjPrice
         });
         
-        await product.save();
+        await product.save({ session });
       }
     }
 
-    await consignment.save();
+    await consignment.save({ session });
+
+    // COMMIT ALL TRANSACTIONS SIMULTANEOUSLY
+    await session.commitTransaction();
+    session.endSession();
 
     res.status(200).json({ 
       message: 'Admin correction applied successfully! Inventory stock variations have been cleanly recalculated.', 
       consignment 
     });
   } catch (error) {
+    // IF ANYTHING FAILS, ROLLBACK ALL CHANGES COMPLETELY
+    await session.abortTransaction();
+    session.endSession();
     res.status(500).json({ message: 'Error applying admin correction to sorting run', error: error.message });
   }
 };

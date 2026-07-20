@@ -15,10 +15,9 @@ import Team from './pages/Team';
 
 // Administrative Protected Pages
 import Login from './pages/Login';
-import Consignments from './pages/Consignments';
-
-  // Add this import near your other page components in src/App.jsx:
+import Consignments from './pages/Consignments';  
 import Dashboard from './pages/Dashboard';
+import PriceListManager from './pages/PriceListManager';
 
 /**
  * 🛡️ Security Gatekeeper Wrapper (Upgraded to contextual evaluation)
@@ -34,6 +33,7 @@ const ProtectedRoute = ({ children }) => {
 
 /**
  * 🏢 Public Navigation Master Frame Layout
+ * (Kept completely clean of administrative internal pages)
  */
 const PublicLayout = ({ children }) => {
   const navigate = useNavigate();
@@ -95,6 +95,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Consignments />
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/pricelist" 
+          element={
+            <ProtectedRoute>
+              <PriceListManager />
             </ProtectedRoute>
           } 
         />

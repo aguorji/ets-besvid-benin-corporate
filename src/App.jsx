@@ -18,6 +18,7 @@ import Login from './pages/Login';
 import Consignments from './pages/Consignments';  
 import Dashboard from './pages/Dashboard';
 import PriceListManager from './pages/PriceListManager';
+import SalesLedger from './pages/SalesLedger';
 
 /**
  * 🛡️ Security Gatekeeper Wrapper (Upgraded to contextual evaluation)
@@ -106,6 +107,15 @@ export default function App() {
             </ProtectedRoute>
           } 
         />
+        <Route 
+          path="/salesledger" 
+          element={
+            <ProtectedRoute>
+              <SalesLedger />
+            </ProtectedRoute>
+          } 
+        />
+        
 
         {/* Catch-all Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />

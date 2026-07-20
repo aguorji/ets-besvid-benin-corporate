@@ -25,7 +25,6 @@ export default function Consignments() {
   const [showSortModal, setShowSortModal] = useState(false);
   const [activeSortShip, setActiveSortShip] = useState(null);
   
-  // Added "unit" field directly to the row schema
   const [sortedItems, setSortedItems] = useState([
     { product_ref: '', unit: 'KGS', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }
   ]);
@@ -166,7 +165,7 @@ export default function Consignments() {
             target_weight_g_bale: Number(item.target_weight_g_bale) || 0,
             actual_weight_g_bale: Number(item.actual_weight_g_bale) || 0,
             bales_produced: Number(item.bales_produced) || 0,
-            unit: item.unit // sent to backend in case master updates are processed
+            unit: item.unit
           })),
           byproductsSacked: cleanByproducts.map(by => ({
             byproduct_type: by.byproduct_type.toUpperCase(),
@@ -449,7 +448,7 @@ export default function Consignments() {
                           />
                         </div>
                         
-                        {/* 2. Standard Size Input with Unit Selector Dropdown */}
+                        {/* 2. Standard Size Input */}
                         <div className="md:col-span-3">
                           <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Standard Size</label>
                           <div className="relative flex items-center">
@@ -461,7 +460,7 @@ export default function Consignments() {
                               onChange={(e) => handleSortedItemChange(index, 'target_weight_g_bale', e.target.value)}
                               className="w-full bg-white border border-navy/10 rounded pl-2.5 pr-14 py-1.5 text-xs focus:outline-none focus:border-gold"
                             />
-                            {/* UPGRADED: Intersecting Unit Override Dropdown Selector */}
+                            {/* FIXED: One unified master selector box for the row context */}
                             <select
                               value={item.unit}
                               onChange={(e) => handleSortedItemChange(index, 'unit', e.target.value)}
@@ -473,7 +472,7 @@ export default function Consignments() {
                           </div>
                         </div>
 
-                        {/* 3. Actual Size Input with Linked Unit Selector */}
+                        {/* 3. Actual Size Input */}
                         <div className="md:col-span-3">
                           <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Actual Size</label>
                           <div className="relative flex items-center">
@@ -485,7 +484,7 @@ export default function Consignments() {
                               onChange={(e) => handleSortedItemChange(index, 'actual_weight_g_bale', e.target.value)}
                               className="w-full bg-white border border-navy/10 rounded pl-2.5 pr-14 py-1.5 text-xs focus:outline-none focus:border-gold"
                             />
-                            {/* Secondary Unit selector to match inputs easily */}
+                            {/* FIXED: Synchronized cleanly with the parent row unit context */}
                             <select
                               value={item.unit}
                               onChange={(e) => handleSortedItemChange(index, 'unit', e.target.value)}

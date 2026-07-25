@@ -1,37 +1,46 @@
 import mongoose from 'mongoose';
 
 const ConsignmentSchema = new mongoose.Schema({
-  consignment_ref: { type: String, required: true, unique: true, uppercase: true, trim: true },
-  type: { type: String, enum: ['direct_container', 'giant_bale'], required: true },
-  status: { type: String, enum: ['ordered', 'arrived', 'processing', 'completed'], default: 'arrived' },
+  consignment_ref: { 
+    type: String, 
+    required: true, 
+    unique: true, 
+    trim: true // e.g., "EB-2026-07"
+  },
   arrival_date: { type: Date, default: Date.now },
+  status: { type: String, enum: ['Active', 'Closed'], default: 'Active' },
   
-  // Financial metrics for calculating precise landed cost distribution later
-  total_landing_cost: { type: Number, required: true, default: 0 },
-  notes: { type: String, trim: true },
+  // 1. FINANCIAL COST POOL (Capital Outlays)
+  cost_pool: {
+    base_purchase_cost: { type: Number, default: 0 },
+    sea_freight: { type: Number, default: 0 },
+    port_clearing_fees: { type: Number, default: 0 },
+    terminal_handling: { type: Number, default: 0 },
+    // Rolled over from the previous consignment's left-overs
+    inbound_remnant_value_injected: { type: Number, default: 0 } 
+  },
 
-  // Tracking sorted structural output metrics
-  processing_run: {
-    total_raw_weight: { type: Number, default: 0 }, 
-    
-    // Track bales grouped by their physical size/weight
-    sorted_items: [
-      {
-        product_ref: { type: String, required: true, uppercase: true, trim: true }, // e.g., 'LMD'
-        target_weight_g_bale: { type: Number, required: true, default: 55 },      // Standard weight (e.g., 55 kg)
-        actual_weight_g_bale: { type: Number, required: true, default: 55 },      // Actual weight of this group (e.g., 50 kg)
-        bales_produced: { type: Number, required: true, default: 0 }              // Quantity of bales at this specific weight (e.g., 1 bale)
-      }
-    ],
-    
-    // Dynamic Byproducts Sacked
-    byproducts_sacked: [
-      {
-        byproduct_type: { type: String, required: true, uppercase: true, trim: true }, 
-        weight_kg: { type: Number, required: true, default: 0 },
-        price_per_kg: { type: Number, default: 0 } 
-      }
-    ]
+  // 2. OPERATIONAL EXPENSES (Running costs incurred during warehouse cycle)
+  operating_expenses: [{
+    description: String, // e.g., "Generator Diesel", "Offloading Labor"
+    amount: Number,
+    date: { type: Date, default: Date.now }
+  }],
+
+  // 3. BY-PRODUCT REVENUE MATRIX
+  by_products_sales: [{
+    description: String, // e.g., "Rags / Industrial Waste Scrap"
+    quantity: Number,
+    unit: String, // e.g., "KGS", "BAGS"
+    amount_earned: Number,
+    date: { type: Date, default: Date.now }
+  }],
+
+  // 4. CLOSING ACCOUNTABILITY (For when the batch is fully cleared)
+  closing_remnants: {
+    estimated_mass_kg: { type: Number, default: 0 },
+    assigned_financial_value: { type: Number, default: 0 }, // Carries forward to next batch
+    transferred_to_consignment_ref: { type: String, default: '' } 
   }
 }, { timestamps: true });
 

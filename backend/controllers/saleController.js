@@ -1,115 +1,140 @@
-// backend/controllers/saleController.js
-import Sale from '../models/Sale.js';
-import ProductItem from '../models/ProductItem.js';
+import Product from '../models/Product.js';
+import Consignment from '../models/Consignment.js';
+import Sale from '../models/Sale.js'; 
 
-// @desc     Log a Wholesale Transaction & Automatically Process Inventory Deductions and Debt Status
-// @route    POST /api/sales
-// @access   Private
+// Main transaction execution engine matching your routes
 export const recordSaleTransaction = async (req, res) => {
-  const {
-    customer_name,
-    payment_type,
-    amount_paid,
-    items // 👈 Expecting an array of items now: [{ product_id, production_ref, consignment_id, actual_size, quantity_sold, selling_price, is_adjusted_bale }]
-  } = req.body;
+  // Destructure incoming payload
+  const { 
+    customerName, 
+    date, 
+    items, 
+    paymentType,  
+    amountPaid
+  } = req.body; 
+
+  // Direct context bridge: Securely extract user ID from auth middleware token payload
+  const recordedBy = req.user.id;
 
   try {
-    // 1. Validation check
-    if (!items || items.length === 0) {
-      return res.status(400).json({ error: "An invoice must contain at least one item line." });
-    }
+    const processingInvoiceItems = [];
 
-    const processedItems = [];
-
-    // 2. Loop through each item in the order to verify stock and deduct inventory
+    // Loop through each item to validate inventory and prepare schema input
     for (const item of items) {
-      const product = await ProductItem.findById(item.product_id);
-      if (!product) {
-        return res.status(404).json({ error: `Product category entry missing for ID: ${item.product_id}` });
+      const { 
+        productId, 
+        itemCode, 
+        consignmentRef, 
+        quantitySold, 
+        actualWeight, 
+        sellingPricePerBale 
+      } = item;
+
+      // 1. Validate product catalog existence
+      const productDoc = await Product.findById(productId);
+      if (!productDoc) {
+        return res.status(404).json({ message: `Product code ${itemCode} not found in catalog.` });
       }
 
-      // Find matching production batch variation stack
-      const variation = product.stock_variations.find(v => v.production_ref === item.production_ref);
-      if (!variation) {
-        return res.status(404).json({ error: `Specific production variation batch [${item.production_ref}] not found in stock matrix.` });
-      }
+      // 2. Locate the specific stock batch variation
+      const stockVariation = productDoc.stock_variations.find(
+        v => v.production_ref === consignmentRef
+      );
 
-      // Prevent transaction if stock balances are insufficient
-      if (variation.quantity_balance < item.quantity_sold) {
-        return res.status(400).json({
-          error: `Insufficient Stock Level for ${product.product_name || 'Item'}. Attempted to sell ${item.quantity_sold} units, but only ${variation.quantity_balance} are remaining.`
+      if (!stockVariation) {
+        return res.status(400).json({ 
+          message: `Inventory Error: No stock batch found for ${itemCode} under consignment ${consignmentRef}.` 
         });
       }
 
-      // Deduct inventory balance
-      variation.quantity_sold += item.quantity_sold;
-      await product.save();
+      // 3. Prevent stock overselling
+      if (stockVariation.available_bales < quantitySold) {
+        return res.status(400).json({ 
+          message: `Insufficient Stock: ${itemCode} (${consignmentRef}) has only ${stockVariation.available_bales} bales left, requested ${quantitySold}.` 
+        });
+      }
 
-      // Build out the item row with the database's target set price included
-      processedItems.push({
-        product_id: item.product_id,
-        production_ref: item.production_ref,
-        consignment_id: item.consignment_id,
-        actual_size: item.actual_size,
-        quantity_sold: item.quantity_sold,
-        set_price: variation.adj_price, // Pulled dynamically from inventory setup
-        selling_price: item.selling_price,
-        is_adjusted_bale: item.is_adjusted_bale || false
+      // 4. Locate target baseline price from product data or fall back to selling price
+      const targetSetPrice = productDoc.targetPrice || sellingPricePerBale;
+      const nominalStandardSize = productDoc.standardSize || 55;
+
+      // Deduct stock from catalog and save variation change
+      stockVariation.available_bales -= quantitySold;
+      await productDoc.save();
+
+      // Find the Mongo ID of the consignment to fill the schema schema link
+      const consignmentDoc = await Consignment.findOne({ consignment_ref: consignmentRef });
+      const consignmentId = consignmentDoc ? consignmentDoc._id : productId; // Safe structural fallback
+
+      // Push sanitized data mapping directly to your SaleItemSchema attributes
+      processingInvoiceItems.push({
+        product_id: productId,
+        production_ref: consignmentRef,
+        consignment_id: consignmentId,
+        is_adjusted_bale: actualWeight && Number(actualWeight) !== (quantitySold * nominalStandardSize) ? true : false,
+        actual_size: actualWeight || (quantitySold * nominalStandardSize),
+        quantity_sold: quantitySold,
+        set_price: targetSetPrice,
+        selling_price: sellingPricePerBale
       });
     }
 
-    // 3. Initialize and save the multi-item sale document
-    const sale = new Sale({
-      customer_name,
-      payment_type,
-      amount_paid: payment_type === 'Cash' ? 0 : amount_paid, // Schema middleware automatically sets cash bounds
-      items: processedItems,
-      recorded_by: req.user._id
+    // 5. Instantiation & Hook Automation Trigger
+    // The pre('save') hook in Sale.js catches this array, executes the Weight Variance engine,
+    // and automates gross revenue, margins, and financial aging.
+    const newSaleRecord = new Sale({
+      customer_name: customerName,
+      date: date || new Date(),
+      items: processingInvoiceItems,
+      payment_type: paymentType || 'Cash',
+      amount_paid: amountPaid || 0,
+      recorded_by: recordedBy 
     });
 
-    // Save sale to trigger schema pre-save math (revenue, variance, performance, debt_status)
-    await sale.save();
+    await newSaleRecord.save();
 
-    res.status(201).json({
-      message: "Wholesale transaction executed successfully. Inventory deducted and financial ledgers balanced.",
-      sale
+    return res.status(201).json({
+      success: true,
+      message: "Wholesale transaction executed successfully!",
+      invoiceId: newSaleRecord._id,
+      data: {
+        gross_revenue: newSaleRecord.gross_revenue,
+        balance: newSaleRecord.balance,
+        debt_status: newSaleRecord.debt_status,
+        items: newSaleRecord.items
+      }
     });
+
   } catch (error) {
-    console.error("Sale transaction processing failed:", error);
-    res.status(500).json({ error: "Failed to execute sale transaction ledger processing." });
+    console.error("Critical error inside Sales processing engine:", error);
+    return res.status(500).json({ message: "Internal Server Processing Error", error: error.message });
   }
 };
 
-// @desc     Fetch Active Accounts Receivable / Outstanding Customer Debts Ledger
-// @route    GET /api/sales/receivables
-// @access   Private
-export const getAccountsReceivable = async (req, res) => {
-  try {
-    const debtorsList = await Sale.find({ debt_status: 'Owing' })
-      .populate('items.product_id', 'product_name product_code')
-      .populate('recorded_by', 'name email')
-      .sort({ createdAt: -1 });
-
-    res.status(200).json(debtorsList);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to compile active debt ledger matrix." });
-  }
-};
-
-// @desc     Get all sales records with full audit population for the Admin Dashboard console
-// @route    GET /api/sales
-// @access   Private
-// 👈 Missing Dashboard function added below
+// Fetch all sales ordered by latest entries
 export const getAllSalesTransactions = async (req, res) => {
   try {
-    const sales = await Sale.find()
-      .populate('recorded_by', 'name role')
-      .populate('items.product_id', 'product_name product_code')
-      .sort({ createdAt: -1 });
-
-    res.status(200).json(sales);
+    const sales = await Sale.find().sort({ createdAt: -1 });
+    return res.status(200).json(sales);
   } catch (error) {
-    console.error('Error fetching dashboard sales logs:', error);
-    res.status(500).json({ message: 'Server error: Unable to retrieve transaction audit streams.' });
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+// Live accounts receivable endpoint querying active debts
+export const getAccountsReceivable = async (req, res) => {
+  try {
+    const outstandingDebts = await Sale.find({ debt_status: 'Owing' }).sort({ date: 1 });
+    
+    const totalOutstandingAmount = outstandingDebts.reduce((sum, sale) => sum + sale.balance, 0);
+
+    return res.status(200).json({ 
+      success: true,
+      total_outstanding: totalOutstandingAmount,
+      debtor_count: outstandingDebts.length,
+      debtors: outstandingDebts
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 };

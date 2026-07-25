@@ -14,6 +14,7 @@ dotenv.config();
 import authRoutes from './routes/authRoutes.js';
 import consignmentRoutes from './routes/consignmentRoutes.js';
 import productRoutes from './routes/productRoutes.js';
+import productionRoutes from './routes/productionRoutes.js'; 
 import saleRoutes from './routes/saleRoutes.js';
 import expenseRoutes from './routes/expenseRoutes.js';
 import byproductRoutes from './routes/byproductRoutes.js';
@@ -37,10 +38,12 @@ app.use((req, res, next) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/consignments', consignmentRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/production', productionRoutes);
 app.use('/api/sales', saleRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/byproducts', byproductRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+
 
 // 2. Database Connection Handling Engine
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/ets_besvid_db';

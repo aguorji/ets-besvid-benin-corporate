@@ -1,16 +1,15 @@
-// backend/models/Sale.js
 import mongoose from 'mongoose';
 
 const SaleItemSchema = new mongoose.Schema({
-  product_id: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductItem', required: true },
+  product_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
   production_ref: { type: String, required: true },
   consignment_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Consignment', required: true },
   
-  is_adjusted_bale: { type: Boolean, default: false }, // 👈 Tracks if this line is the remnant bale
-  actual_size: { type: Number, required: true },       // Exact weight (e.g., 55kg or custom)
+  is_adjusted_bale: { type: Boolean, default: false }, // Tracks if this line includes the variant bale
+  actual_size: { type: Number, required: true },        // Total mass sold in KG or PCS
   quantity_sold: { type: Number, required: true, default: 1 },
-  set_price: { type: Number, required: true },         // Baseline target price
-  selling_price: { type: Number, required: true },     // Override negotiated price
+  set_price: { type: Number, required: true },         // Baseline target price per standard bale
+  selling_price: { type: Number, required: true },     // Base negotiated price per standard bale
   
   revenue: { type: Number, required: true, default: 0 },
   variance: { type: Number, required: true, default: 0 },
@@ -20,8 +19,6 @@ const SaleItemSchema = new mongoose.Schema({
 const SaleSchema = new mongoose.Schema({
   customer_name: { type: String, required: true },
   date: { type: Date, default: Date.now },
-  
-  // 👈 Upgraded to a structured array so one invoice can contain multiple items
   items: [SaleItemSchema], 
 
   gross_revenue: { type: Number, required: true, default: 0 },
@@ -30,19 +27,37 @@ const SaleSchema = new mongoose.Schema({
   balance: { type: Number, required: true, default: 0 },
   debt_status: { type: String, enum: ['N/A', 'Owing', 'Settled'], default: 'N/A' },
   
-  // 🛡️ Admin Audit Anchor
   recorded_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
 }, { timestamps: true });
+
 
 // --- AUTOMATED ACCOUNTING ENGINE ---
 SaleSchema.pre('save', function(next) {
   let computedGross = 0;
+  const STANDARD_WEIGHT = 55; // Your default target baseline mass per bale
 
-  // 1. Calculate the financial metrics individually for each item row
   this.items.forEach(item => {
-    item.revenue = item.quantity_sold * item.selling_price;
-    item.variance = (item.selling_price - item.set_price) * item.quantity_sold;
+    // ⚖️ Weight Variance Engine: Check if actual weight deviates from expected standard weight
+    const expectedStandardMass = item.quantity_sold * STANDARD_WEIGHT;
 
+    if (item.actual_size && Number(item.actual_size) !== expectedStandardMass) {
+      // Scale calculation dynamically to match exact fractional mass sold
+      const effectivePricePerKg = item.selling_price / STANDARD_WEIGHT;
+      const effectiveTargetPricePerKg = item.set_price / STANDARD_WEIGHT;
+      
+      const rawRevenue = Number(item.actual_size) * effectivePricePerKg;
+      const rawVariance = (effectivePricePerKg - effectiveTargetPricePerKg) * Number(item.actual_size);
+
+      // Clean individual item precision
+      item.revenue = Math.round(rawRevenue * 100) / 100;
+      item.variance = Math.round(rawVariance * 100) / 100;
+    } else {
+      // Standard transaction processing 
+      item.revenue = item.quantity_sold * item.selling_price;
+      item.variance = (item.selling_price - item.set_price) * item.quantity_sold;
+    }
+
+    // Assign performance metrics based on net variance outcome
     if (item.variance > 0) item.performance = 'Above Target';
     else if (item.variance === 0) item.performance = 'On Target';
     else item.performance = 'Below Target';
@@ -50,15 +65,17 @@ SaleSchema.pre('save', function(next) {
     computedGross += item.revenue;
   });
 
-  this.gross_revenue = computedGross;
+  // Round gross revenue down to clean financial currency structure
+  this.gross_revenue = Math.round(computedGross * 100) / 100;
 
-  // 2. Evaluate overall invoice cash flows and balance positions
+  // Evaluate final invoice balances and aging debt visibility with rounding constraints
   if (this.payment_type === 'Cash') {
     this.amount_paid = this.gross_revenue;
     this.balance = 0;
     this.debt_status = 'N/A';
   } else {
-    this.balance = this.gross_revenue - this.amount_paid;
+    const rawBalance = this.gross_revenue - this.amount_paid;
+    this.balance = Math.round(rawBalance * 100) / 100;
     this.debt_status = this.balance > 0 ? 'Owing' : 'Settled';
   }
   next();

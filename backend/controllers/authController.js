@@ -38,6 +38,7 @@ export const loginUser = async (req, res) => {
 // @desc     Admin Only: Create New Staff Accounts
 // @route    POST /api/auth/create-staff
 // @access   Private/Admin
+// backend/controllers/authController.js
 export const createStaffAccount = async (req, res) => {
   const { name, email, password, role } = req.body;
 
@@ -46,6 +47,22 @@ export const createStaffAccount = async (req, res) => {
     if (userExists) {
       return res.status(400).json({ error: "A user profile with this email already exists." });
     }
+
+    // Add this missing execution logic to write the account to MongoDB:
+    const newStaff = await User.create({
+      name,
+      email,
+      password, // User Schema pre('save') hook handles the bcrypt hashing automatically!
+      role: role || 'user'
+    });
+
+    return res.status(201).json({
+      _id: newStaff._id,
+      name: newStaff.name,
+      email: newStaff.email,
+      role: newStaff.role,
+      message: "Staff member identity registered successfully."
+    });
 
   } catch (error) {
     res.status(500).json({ error: "Failed to initialize staff profile." });

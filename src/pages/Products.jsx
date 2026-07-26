@@ -1,3 +1,4 @@
+import apiClient from '../api/client';
 import React, { useState, useEffect } from 'react';
 import { Search, Loader2, Package, Plus, X, CheckCircle } from 'lucide-react';
 
@@ -23,10 +24,10 @@ export default function Products() {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch('/api/products');
-      if (!response.ok) throw new Error(`Database connection failed: ${response.status}`);
-      const data = await response.json();
-      setProducts(data);
+      // Use apiClient instead of raw fetch
+      const response = await apiClient.get('/products');
+      // Axios stores the parsed JSON data automatically inside .data
+      setProducts(response.data);
     } catch (err) {
       console.error("Backend connection error:", err);
       setError("Could not connect to live inventory. Please refresh or try again later.");
@@ -39,12 +40,6 @@ export default function Products() {
     fetchInventory();
   }, []);
 
-  // Handle Form Inputs Changes
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
   // Submit New Master Product Row
   const handleFormSubmit = async (e) => {
     e.preventDefault();
@@ -52,28 +47,24 @@ export default function Products() {
     setFormMessage({ type: '', text: '' });
 
     try {
-      const response = await fetch('/api/products', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...formData,
-          standardSize: Number(formData.standardSize)
-        })
+      // Use apiClient.post instead of fetch
+      const response = await apiClient.post('/products', {
+        ...formData,
+        standardSize: Number(formData.standardSize)
       });
 
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.message || 'Failed to establish product entry.');
-      }
-
-      setFormMessage({ type: 'success', text: `Product '${formData.itemCode.toUpperCase()}' registered successfully!` });
+      setFormMessage({ 
+        type: 'success', 
+        text: `Product '${formData.itemCode.toUpperCase()}' registered successfully!` 
+      });
       setFormData({ itemCode: '', description: '', unit: 'KGS', standardSize: '' });
       
-      // Dynamic live refresh without full page reload
+      // Dynamic live refresh
       fetchInventory();
     } catch (err) {
-      setFormMessage({ type: 'error', text: err.message });
+      // Axios errors capture response messages inside err.response?.data?.message
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to establish product entry.';
+      setFormMessage({ type: 'error', text: errorMsg });
     } finally {
       setFormSubmitLoading(false);
     }

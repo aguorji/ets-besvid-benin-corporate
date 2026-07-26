@@ -10,7 +10,7 @@ export const AuthProvider = ({ children }) => {
 
   // Check for an existing token on app initialization
   useEffect(() => {
-    const initializeAuth = async () => {
+    const initializeAuth = () => {
       const token = localStorage.getItem('ets_token');
       const storedUser = localStorage.getItem('ets_user');
       
@@ -21,7 +21,7 @@ export const AuthProvider = ({ children }) => {
           localStorage.removeItem('ets_token');
           localStorage.removeItem('ets_user');
         }
-      } else if (storedUser === "undefined") {
+      } else {
         localStorage.removeItem('ets_token');
         localStorage.removeItem('ets_user');
       }
@@ -49,9 +49,12 @@ export const AuthProvider = ({ children }) => {
       setUser(userData);
       return { success: true };
     } catch (error) {
+      // FIX: Capture error.response.data.error to match your Express backend controller
+      const backendMessage = error.response?.data?.error || error.response?.data?.message;
+      
       return {
         success: false,
-        message: error.response?.data?.message || 'Authentication failed. Server unreachable.'
+        message: backendMessage || 'Authentication failed. Server unreachable.'
       };
     }
   };

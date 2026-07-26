@@ -14,7 +14,7 @@ dotenv.config();
 import authRoutes from './routes/authRoutes.js';
 import consignmentRoutes from './routes/consignmentRoutes.js';
 import productRoutes from './routes/productRoutes.js';
-import productionRoutes from './routes/productionRoutes.js'; 
+import productionRoutes from './routes/productionRoutes.js';
 import saleRoutes from './routes/saleRoutes.js';
 import expenseRoutes from './routes/expenseRoutes.js';
 import byproductRoutes from './routes/byproductRoutes.js';

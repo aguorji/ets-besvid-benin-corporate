@@ -1,18 +1,26 @@
 // backend/migrateToConsignment.js
-const mongoose = require('mongoose');
-const Consignment = require('./models/Consignment'); // Check your exact path
-const Product = require('./models/Product');         // Check your exact path
-// If you have a Sale model, require it here:
-// const Sale = require('./models/Sale'); 
 
-// Connect to your local MongoDB setup
-mongoose.connect('mongodb://localhost:27017/your_database_name')
-  .then(() => console.log("💾 MongoDB Connected for Migration..."))
+import mongoose from 'mongoose';
+import dotenv from 'dotenv'; //  Added to load your secure framework credentials
+import Consignment from './models/Consignment.js';
+import ProductItem from './models/ProductItem.js';
+import Sale from './models/Sale.js';
+
+// Load the environment variables from your configuration file
+dotenv.config(); 
+
+// Grab the connection string that your main server uses, falling back to local if blank
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/ets-besvid-benin'; 
+
+mongoose.connect(MONGO_URI)
+  .then(() => console.log("💾 MongoDB Connected to Secure Framework for Structural Ledger Migration..."))
   .catch(err => console.error("Database connection error:", err));
+
+// ... keep the rest of the file exactly the same as before ...
 
 async function runMigration() {
   try {
-    console.log("🚀 Starting Consignment System Integration...");
+    console.log("🚀 Starting Consignment System Integration Pipeline...");
 
     // 1. Create a Default Baseline Consignment Record
     let legacyConsignment = await Consignment.findOne({ consignment_ref: 'INIT-BATCH-2026' });
@@ -33,8 +41,8 @@ async function runMigration() {
       console.log(`✅ Created Baseline Consignment Master: ${legacyConsignment.consignment_ref}`);
     }
 
-    // 2. Map existing product variations to this Consignment ID
-    const products = await Product.find({});
+    // 2. Map existing product variations to this Consignment ID in ProductItem
+    const products = await ProductItem.find({});
     let updatedProductsCount = 0;
 
     for (let product of products) {
@@ -54,22 +62,21 @@ async function runMigration() {
         updatedProductsCount++;
       }
     }
-    console.log(`✅ Structural changes applied across ${updatedProductsCount} product documents.`);
+    console.log(`✅ Structural changes applied across ${updatedProductsCount} product items.`);
 
     // 3. Link past sales commits to this baseline consignment
-    // If your Sale/Invoice model matches, uncomment this section to update past sales:
-    /*
     const salesUpdateResult = await Sale.updateMany(
-      { "items.consignmentId": { $exists: false } }, 
-      { $set: { "items.$[].consignmentId": legacyConsignment._id } }
+      { "items.consignment_id": { $exists: false } }, 
+      { $set: { "items.$[].consignment_id": legacyConsignment._id } }
     );
     console.log(`✅ Updated historical sales records: ${salesUpdateResult.modifiedCount} line items linked.`);
-    */
 
-    console.log("🎉 Integration completed successfully! Ready for the new chapter.");
+    console.log("🎉 Integration completed successfully! System is fully aligned.");
+    mongoose.connection.close();
     process.exit(0);
   } catch (error) {
     console.error("❌ Migration encountered a critical error:", error);
+    mongoose.connection.close();
     process.exit(1);
   }
 }

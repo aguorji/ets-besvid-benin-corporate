@@ -1,7 +1,8 @@
 import mongoose from 'mongoose';
 
 const SaleItemSchema = new mongoose.Schema({
-  product_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+  //  UPDATED: ref changed from 'Product' to 'ProductItem'
+  product_id: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductItem', required: true },
   production_ref: { type: String, required: true },
   consignment_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Consignment', required: true },
   

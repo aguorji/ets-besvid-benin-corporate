@@ -10,14 +10,16 @@ const ProductionLogSchema = new mongoose.Schema({
   
   // 1. WHAT WENT IN (The Giant Bales broken down)
   input_giant_bales: [{
-    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+    //  UPDATED: ref changed from 'Product' to 'ProductItem'
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductItem', required: true },
     itemCode: { type: String, required: true }, // e.g., "G-LMD"
     bales_deducted: { type: Number, required: true }
   }],
 
   // 2. WHAT CAME OUT (Standard wholesale items ready for retail sale)
   sorted_bales_produced: [{
-    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+    //  UPDATED: ref changed from 'Product' to 'ProductItem'
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductItem', required: true },
     itemCode: { type: String, required: true }, // e.g., "LMD", "MCSH"
     bales_added: { type: Number, required: true },
     total_weight_yielded: { type: Number, default: 0 } // Optional crosscheck metric

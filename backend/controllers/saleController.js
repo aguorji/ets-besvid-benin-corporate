@@ -1,4 +1,4 @@
-import Product from '../models/Product.js';
+import ProductItem from '../models/ProductItem.js';
 import Consignment from '../models/Consignment.js';
 import Sale from '../models/Sale.js'; 
 
@@ -18,6 +18,7 @@ export const recordSaleTransaction = async (req, res) => {
 
   try {
     const processingInvoiceItems = [];
+    const modifiedProducts = []; // Tracker array to safely save all product docs after verification
 
     // Loop through each item to validate inventory and prepare schema input
     for (const item of items) {
@@ -31,7 +32,7 @@ export const recordSaleTransaction = async (req, res) => {
       } = item;
 
       // 1. Validate product catalog existence
-      const productDoc = await Product.findById(productId);
+      const productDoc = await ProductItem.findById(productId);
       if (!productDoc) {
         return res.status(404).json({ message: `Product code ${itemCode} not found in catalog.` });
       }
@@ -47,20 +48,24 @@ export const recordSaleTransaction = async (req, res) => {
         });
       }
 
-      // 3. Prevent stock overselling
-      if (stockVariation.available_bales < quantitySold) {
+      // 3. Prevent stock overselling - UPDATED to use 'quantity_balance' from your ProductItem schema
+      if (stockVariation.quantity_balance < quantitySold) {
         return res.status(400).json({ 
-          message: `Insufficient Stock: ${itemCode} (${consignmentRef}) has only ${stockVariation.available_bales} bales left, requested ${quantitySold}.` 
+          message: `Insufficient Stock: ${itemCode} (${consignmentRef}) has only ${stockVariation.quantity_balance} bales left, requested ${quantitySold}.` 
         });
       }
 
-      // 4. Locate target baseline price from product data or fall back to selling price
-      const targetSetPrice = productDoc.targetPrice || sellingPricePerBale;
+      // 4. Locate target baseline price from product data - UPDATED to check 'basePrice'
+      const targetSetPrice = productDoc.basePrice || sellingPricePerBale;
       const nominalStandardSize = productDoc.standardSize || 55;
 
-      // Deduct stock from catalog and save variation change
-      stockVariation.available_bales -= quantitySold;
-      await productDoc.save();
+      // Deduct stock from catalog - UPDATED to use 'quantity_balance'
+      stockVariation.quantity_balance -= quantitySold;
+      
+      // Store the tracking pointer to save all changes safely outside the loop
+      if (!modifiedProducts.some(p => p._id.toString() === productDoc._id.toString())) {
+        modifiedProducts.push(productDoc);
+      }
 
       // Find the Mongo ID of the consignment to fill the schema schema link
       const consignmentDoc = await Consignment.findOne({ consignment_ref: consignmentRef });
@@ -79,9 +84,12 @@ export const recordSaleTransaction = async (req, res) => {
       });
     }
 
+    // Save all modified product quantities simultaneously after verifying every row successfully
+    for (const doc of modifiedProducts) {
+      await doc.save();
+    }
+
     // 5. Instantiation & Hook Automation Trigger
-    // The pre('save') hook in Sale.js catches this array, executes the Weight Variance engine,
-    // and automates gross revenue, margins, and financial aging.
     const newSaleRecord = new Sale({
       customer_name: customerName,
       date: date || new Date(),

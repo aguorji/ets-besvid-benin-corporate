@@ -221,3 +221,29 @@ export const updateProcessedGiantBale = async (req, res) => {
     res.status(500).json({ message: 'Error applying admin correction to sorting run', error: error.message });
   }
 };
+
+// @desc    Get consignment reconciliation metrics and yields
+// @route   GET /api/consignments/:id/reconciliation
+export const getConsignmentReconciliation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const consignment = await Consignment.findById(id);
+
+    if (!consignment) {
+      return res.status(404).json({ message: 'Consignment registry record not found.' });
+    }
+
+    // Sends the payload structured for your frontend reconciliation ledger sheet
+    res.status(200).json({
+      _id: consignment._id,
+      consignment_ref: consignment.consignment_ref,
+      type: consignment.type,
+      total_landing_cost: consignment.total_landing_cost,
+      status: consignment.status,
+      processing_run: consignment.processing_run || null,
+      arrival_date: consignment.arrival_date
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Reconciliation data compilation failure', error: error.message });
+  }
+};

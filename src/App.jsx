@@ -2,9 +2,6 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 
-// Import our central security state hook
-import { useAuth } from './context/AuthContext';
-
 // Public Corporate Pages
 import Home from './pages/Home';
 import Products from './pages/Products';
@@ -19,18 +16,11 @@ import Consignments from './pages/Consignments';
 import Dashboard from './pages/Dashboard';
 import PriceListManager from './pages/PriceListManager';
 import SalesLedger from './pages/SalesLedger';
+import ConsignmentReconciliation from './pages/ConsignmentReconciliation';
+import AuditLogs from './pages/AuditLogs';
 
-/**
- * 🛡️ Security Gatekeeper Wrapper (Upgraded to contextual evaluation)
- */
-const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated } = useAuth(); // 👈 Reactive evaluation instead of raw storage checks
-
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
-  }
-  return children;
-};
+// Standalone Security Layout Wrapper
+import ProtectedRoute from './components/ProtectedRoute';
 
 /**
  * 🏢 Public Navigation Master Frame Layout
@@ -82,40 +72,15 @@ export default function App() {
         {/* 2. Isolated Administrative Portal Routes */}
         <Route path="/login" element={<Login />} />
 
-        {/* 3. Securely Protected Ledger Dashboard Matrix */}
-        <Route 
-          path="/dashboard" 
-          element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          } 
-        />
-        <Route 
-          path="/consignments" 
-          element={
-            <ProtectedRoute>
-              <Consignments />
-            </ProtectedRoute>
-          } 
-        />
-        <Route 
-          path="/pricelist" 
-          element={
-            <ProtectedRoute>
-              <PriceListManager />
-            </ProtectedRoute>
-          } 
-        />
-        <Route 
-          path="/salesledger" 
-          element={
-            <ProtectedRoute>
-              <SalesLedger />
-            </ProtectedRoute>
-          } 
-        />
-        
+        {/* 3. Securely Protected Ledger Dashboard Matrix (Layout Nesting Strategy) */}
+        <Route element={<ProtectedRoute />}>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/consignments" element={<Consignments />} />
+          <Route path="/pricelist" element={<PriceListManager />} />
+          <Route path="/salesledger" element={<SalesLedger />} />
+          <Route path="/consignment-reconciliation/:id" element={<ConsignmentReconciliation />} />
+          <Route path="/audit-logs" element={<AuditLogs />} />
+        </Route>
 
         {/* Catch-all Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />

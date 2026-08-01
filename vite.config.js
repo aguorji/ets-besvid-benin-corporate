@@ -8,7 +8,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: 'http://127.0.0.1:5000', // Changed 'localhost' to '127.0.0.1' to bypass IPv6 loopback mismatch
         changeOrigin: true,
         secure: false,
       }

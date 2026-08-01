@@ -1,57 +1,35 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Loader2, Ship, Plus, X, CheckCircle, AlertCircle, Layers, Trash2 } from 'lucide-react';
+import { Loader2, Ship, Plus, X, CheckCircle, AlertCircle, Edit, Save } from 'lucide-react';
 
 export default function Consignments() {
   const [consignments, setConsignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   
-  // Master Product Catalog state for unit lookups
-  const [availableProducts, setAvailableProducts] = useState([]);
-
-  // Form Display and Input States
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  
   const [formData, setFormData] = useState({
     consignment_ref: '',
     type: 'direct_container',
     total_landing_cost: '',
-    total_raw_weight: '',
     notes: ''
   });
+  
   const [submitLoading, setSubmitLoading] = useState(false);
   const [formMessage, setFormMessage] = useState({ type: '', text: '' });
 
-  // --- SORTING MODAL STATES ---
-  const [showSortModal, setShowSortModal] = useState(false);
-  const [activeSortShip, setActiveSortShip] = useState(null);
-  
-  const [sortedItems, setSortedItems] = useState([
-    { product_ref: '', unit: 'KGS', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }
-  ]);
-  const [byproductsSacked, setByproductsSacked] = useState([
-    { byproduct_type: '', weight_kg: '', price_per_kg: '' }
-  ]);
-  const [sortLoading, setSortLoading] = useState(false);
-
-  // Fetch both Consignments and Master Products
   const fetchData = async () => {
     try {
       setLoading(true);
       setError(null);
-      
-      const consResponse = await fetch('/api/consignments');
-      if (!consResponse.ok) throw new Error(`Consignments server returned status: ${consResponse.status}`);
-      const consData = await consResponse.json();
-      setConsignments(consData);
-
-      const prodResponse = await fetch('/api/products'); 
-      if (prodResponse.ok) {
-        const prodData = await prodResponse.json();
-        setAvailableProducts(prodData);
-      }
+      const response = await fetch('/api/consignments');
+      if (!response.ok) throw new Error(`Server status returned: ${response.status}`);
+      const data = await response.json();
+      setConsignments(data);
     } catch (err) {
-      console.error("Data synchronization failure:", err);
-      setError("Unable to sync live profiles. Verify backend server connectivity.");
+      console.error(err);
+      setError("Failed to sync consignment data with backend.");
     } finally {
       setLoading(false);
     }
@@ -66,51 +44,23 @@ export default function Consignments() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  // --- DYNAMIC HANDLERS FOR SORTED BALES ---
-  const handleAddSortedItem = () => {
-    setSortedItems(prev => [...prev, { product_ref: '', unit: 'KGS', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }]);
-  };
-
-  const handleRemoveSortedItem = (index) => {
-    setSortedItems(prev => prev.filter((_, i) => i !== index));
-  };
-
-  // Upgraded handler to auto-select unit from database on item code change, while keeping it manually editable
-  const handleSortedItemChange = (index, field, value) => {
-    setSortedItems(prev => {
-      const updated = [...prev];
-      updated[index][field] = value;
-
-      // If they just changed the product code, look up its master unit and apply it as the default selection
-      if (field === 'product_ref') {
-        const match = availableProducts.find(
-          (p) => p.itemCode?.toUpperCase() === value.trim().toUpperCase()
-        );
-        if (match?.unit) {
-          updated[index]['unit'] = match.unit.toUpperCase();
-          updated[index]['target_weight_g_bale'] = match.standardSize || 55;
-          updated[index]['actual_weight_g_bale'] = match.standardSize || 55;
-        }
-      }
-      return updated;
+  const startModification = (item) => {
+    setEditingId(item._id);
+    setFormData({
+      consignment_ref: item.consignment_ref || '',
+      type: item.type || 'direct_container',
+      total_landing_cost: item.total_landing_cost || '',
+      notes: item.notes || ''
     });
+    setShowAddForm(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // --- DYNAMIC HANDLERS FOR BYPRODUCTS ---
-  const handleAddByproduct = () => {
-    setByproductsSacked(prev => [...prev, { byproduct_type: '', weight_kg: '', price_per_kg: '' }]);
-  };
-
-  const handleRemoveByproduct = (index) => {
-    setByproductsSacked(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleByproductChange = (index, field, value) => {
-    setByproductsSacked(prev => {
-      const updated = [...prev];
-      updated[index][field] = value;
-      return updated;
-    });
+  const resetFormState = () => {
+    setEditingId(null);
+    setShowAddForm(false);
+    setFormData({ consignment_ref: '', type: 'direct_container', total_landing_cost: '', notes: '' });
+    setFormMessage({ type: '', text: '' });
   };
 
   const handleFormSubmit = async (e) => {
@@ -118,22 +68,32 @@ export default function Consignments() {
     setSubmitLoading(true);
     setFormMessage({ type: '', text: '' });
 
+    const targetUrl = editingId ? `/api/consignments/${editingId}` : '/api/consignments';
+    const targetMethod = editingId ? 'PUT' : 'POST';
+
     try {
-      const response = await fetch('/api/consignments', {
-        method: 'POST',
+      const response = await fetch(targetUrl, {
+        method: targetMethod,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...formData,
+          consignment_ref: formData.consignment_ref.trim(),
+          type: formData.type,
           total_landing_cost: Number(formData.total_landing_cost) || 0,
-          total_raw_weight: formData.type === 'giant_bale' ? (Number(formData.total_raw_weight) || 0) : 0
+          notes: formData.notes.trim()
         })
       });
 
       const result = await response.json();
-      if (!response.ok) throw new Error(result.message || 'Failed to file manifest.');
+      if (!response.ok) throw new Error(result.message || 'Transaction submission rejected.');
 
-      setFormMessage({ type: 'success', text: `Consignment '${formData.consignment_ref.toUpperCase()}' registered successfully.` });
-      setFormData({ consignment_ref: '', type: 'direct_container', total_landing_cost: '', total_raw_weight: '', notes: '' });
+      setFormMessage({
+        type: 'success',
+        text: editingId ? 'Manifest records updated successfully.' : 'New manifest profile committed.'
+      });
+      
+      if (!editingId) {
+        setFormData({ consignment_ref: '', type: 'direct_container', total_landing_cost: '', notes: '' });
+      }
       fetchData();
     } catch (err) {
       setFormMessage({ type: 'error', text: err.message });
@@ -142,109 +102,56 @@ export default function Consignments() {
     }
   };
 
-  // --- SORTING TRANSACTION SUBMISSION ---
-  const handleSortSubmit = async (e) => {
-    e.preventDefault();
-    
-    const cleanItems = sortedItems.filter(item => item.product_ref.trim() !== '');
-    const cleanByproducts = byproductsSacked.filter(by => by.byproduct_type.trim() !== '');
-
-    if (cleanItems.length === 0) {
-      alert("⚠️ You must log at least one completed bale variety!");
-      return;
-    }
-
-    setSortLoading(true);
-    try {
-      const response = await fetch(`/api/consignments/${activeSortShip._id}/process`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sortedItems: cleanItems.map(item => ({
-            product_ref: item.product_ref.toUpperCase(),
-            target_weight_g_bale: Number(item.target_weight_g_bale) || 0,
-            actual_weight_g_bale: Number(item.actual_weight_g_bale) || 0,
-            bales_produced: Number(item.bales_produced) || 0,
-            unit: item.unit
-          })),
-          byproductsSacked: cleanByproducts.map(by => ({
-            byproduct_type: by.byproduct_type.toUpperCase(),
-            weight_kg: Number(by.weight_kg) || 0,
-            price_per_kg: Number(by.price_per_kg) || 0
-          }))
-        })
-      });
-
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.message || 'Failed to complete sorting transaction.');
-
-      alert(`🎉 Sorting run for ${activeSortShip.consignment_ref} processed and committed successfully!`);
-      setShowSortModal(false);
-      
-      setSortedItems([{ product_ref: '', unit: 'KGS', target_weight_g_bale: 55, actual_weight_g_bale: 55, bales_produced: '' }]);
-      setByproductsSacked([{ byproduct_type: '', weight_kg: '', price_per_kg: '' }]);
-      
-      fetchData();
-    } catch (err) {
-      console.error("Sorting transaction failure:", err);
-      alert(`🚨 Error committing transaction: ${err.message}`);
-    } finally {
-      setSortLoading(false);
-    }
-  };
-
   return (
-    <div className="min-h-screen bg-off-white text-navy font-sans pb-20">
-      
-      {/* HEADER ROW */}
-      <section className="bg-navy text-white py-12 border-b-2 border-gold">
-        <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+    <div className="min-h-screen bg-neutral-50 text-slate-900 pb-16">
+      {/* Header Bar */}
+      <header className="bg-slate-900 text-white py-10 border-b-2 border-amber-500 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h1 className="font-serif text-3xl font-bold tracking-tight">Arrivals & Consignments</h1>
-            <p className="text-white/60 text-xs md:text-sm mt-2 max-w-xl">
-              Track incoming direct containers and local giant bale breakdown workflows with precision landing metrics.
-            </p>
+            <h1 className="text-2xl font-bold font-serif tracking-tight">Consignment Entry Registry</h1>
+            <p className="text-slate-400 text-xs mt-1">Landed entry logistics tracking and manifest reconciliation profiles</p>
           </div>
           <button
-            onClick={() => { setShowAddForm(!showAddForm); setFormMessage({ type: '', text: '' }); }}
-            className="bg-gold hover:bg-gold/90 text-navy font-bold text-xs uppercase tracking-wider px-4 py-2.5 rounded flex items-center gap-2 cursor-pointer transition-all shadow-md"
+            type="button"
+            onClick={() => { if (showAddForm) resetFormState(); else setShowAddForm(true); }}
+            className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs uppercase tracking-wider px-4 py-2.5 rounded transition shadow-md cursor-pointer"
           >
-            {showAddForm ? <X size={14} /> : <Plus size={14} />}
-            {showAddForm ? "Close Intake Panel" : "Log New Arrival"}
+            {showAddForm ? 'Close Editor' : 'Log New Arrival'}
           </button>
         </div>
-      </section>
+      </header>
 
-      {/* MANIFEST ENTRY INTERFACE */}
+      {/* Intake / Modification Panel */}
       {showAddForm && (
-        <section className="max-w-6xl mx-auto px-6 mt-6 animate-fadeIn">
-          <div className="bg-white border-l-4 border-gold rounded shadow-sm p-6">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-navy mb-4 flex items-center gap-2">
-              <Ship size={16} className="text-gold" /> Shipment Manifest Intake Portal
+        <section className="max-w-7xl mx-auto px-6 mt-6">
+          <div className="bg-white border-l-4 border-amber-500 rounded shadow-sm p-6">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-slate-900 mb-4 flex items-center gap-2">
+              <Ship size={16} className="text-amber-500" /> 
+              {editingId ? 'Modify Active Manifest Data' : 'Shipment Manifest Entry'}
             </h2>
 
             <form onSubmit={handleFormSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-navy/60 mb-1">Consignment Ref</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Consignment Ref</label>
                   <input
                     type="text"
                     name="consignment_ref"
                     required
-                    placeholder="e.g., BR-2026-01"
+                    placeholder="e.g., CB/04-2026"
                     value={formData.consignment_ref}
                     onChange={handleInputChange}
-                    className="w-full bg-off-white border border-navy/10 rounded px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-gold"
+                    className="w-full bg-neutral-50 border border-slate-200 rounded px-3 py-2 text-xs font-mono font-bold focus:outline-none focus:border-amber-500 text-slate-900"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-navy/60 mb-1">Consignment Type</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Consignment Type</label>
                   <select
                     name="type"
                     value={formData.type}
                     onChange={handleInputChange}
-                    className="w-full bg-off-white border border-navy/10 rounded px-2 py-2 text-xs font-bold focus:outline-none focus:border-gold"
+                    className="w-full bg-neutral-50 border border-slate-200 rounded px-2 py-2 text-xs font-bold focus:outline-none focus:border-amber-500 text-slate-900"
                   >
                     <option value="direct_container">Direct Container</option>
                     <option value="giant_bale">Giant Bale (Sorting Run)</option>
@@ -252,53 +159,48 @@ export default function Consignments() {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-navy/60 mb-1">Total Landing Cost</label>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Total Landing Cost</label>
                   <input
                     type="number"
                     name="total_landing_cost"
                     required
-                    placeholder="Landed expenses amount"
+                    placeholder="Landed costs value"
                     value={formData.total_landing_cost}
                     onChange={handleInputChange}
-                    className="w-full bg-off-white border border-navy/10 rounded px-3 py-2 text-xs font-bold focus:outline-none focus:border-gold"
+                    className="w-full bg-neutral-50 border border-slate-200 rounded px-3 py-2 text-xs font-bold focus:outline-none focus:border-amber-500 text-slate-900"
                   />
                 </div>
-
-                {formData.type === 'giant_bale' && (
-                  <div className="animate-fadeIn">
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-navy/60 mb-1">Total Raw Weight (KGS)</label>
-                    <input
-                      type="number"
-                      name="total_raw_weight"
-                      required
-                      placeholder="e.g., 2500"
-                      value={formData.total_raw_weight}
-                      onChange={handleInputChange}
-                      className="w-full bg-off-white border border-navy/10 rounded px-3 py-2 text-xs font-bold border-gold focus:outline-none"
-                    />
-                  </div>
-                )}
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-navy/60 mb-1">Manifest Notes / Port Details</label>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Manifest Context / Notes</label>
                 <textarea
                   name="notes"
                   rows="2"
-                  placeholder="Vessel name, clearing coordinates, or loading benchmarks..."
+                  placeholder="Vessel parameters, cargo location, routing logs..."
                   value={formData.notes}
                   onChange={handleInputChange}
-                  className="w-full bg-off-white border border-navy/10 rounded px-3 py-2 text-xs focus:outline-none focus:border-gold"
+                  className="w-full bg-neutral-50 border border-slate-200 rounded px-3 py-2 text-xs focus:outline-none focus:border-amber-500 text-slate-900"
                 ></textarea>
               </div>
 
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
+                {editingId && (
+                  <button
+                    type="button"
+                    onClick={resetFormState}
+                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold uppercase tracking-wider px-4 py-2.5 rounded cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                )}
                 <button
                   type="submit"
                   disabled={submitLoading}
-                  className="bg-navy text-gold hover:bg-navy/90 font-bold text-xs uppercase tracking-widest px-6 py-2.5 rounded transition-all flex items-center gap-2 cursor-pointer"
+                  className="bg-slate-900 text-amber-500 hover:bg-slate-800 font-bold text-xs uppercase tracking-widest px-6 py-2.5 rounded transition flex items-center gap-2 cursor-pointer"
                 >
-                  {submitLoading ? <Loader2 className="animate-spin" size={14} /> : "Inject Shipment Profile"}
+                  {submitLoading ? <Loader2 className="animate-spin" size={14} /> : editingId ? <Save size={14} /> : null}
+                  {editingId ? 'Save Modifications' : 'Commit Arrival Entry'}
                 </button>
               </div>
             </form>
@@ -315,65 +217,64 @@ export default function Consignments() {
         </section>
       )}
 
-      {/* ARRIVALS DATA MATRIX VIEW */}
-      <main className="max-w-6xl mx-auto px-6 mt-8">
+      {/* Primary Data Grid */}
+      <main className="max-w-7xl mx-auto px-6 mt-8">
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 text-navy/60">
-            <Loader2 className="animate-spin text-gold mb-2" size={32} />
-            <p className="text-xs font-bold tracking-widest uppercase">Syncing Manifest Ledgers...</p>
+          <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+            <Loader2 className="animate-spin text-amber-500 mb-2" size={32} />
+            <p className="text-[10px] font-bold uppercase tracking-widest">Hydrating Active Logbooks...</p>
           </div>
         ) : error ? (
-          <div className="bg-white border border-red-200 text-red-700 p-6 rounded text-center text-xs font-medium">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-6 rounded text-center text-xs font-medium">
             {error}
           </div>
         ) : consignments.length === 0 ? (
-          <div className="bg-white border border-navy/10 p-12 text-center text-navy/40 font-medium text-sm rounded">
-            No tracked arrivals or container manifests detected on the current interface.
+          <div className="bg-white border border-slate-200 p-12 text-center text-slate-400 text-xs font-medium rounded">
+            No active container manifests logged in records.
           </div>
         ) : (
-          <div className="bg-white border border-navy/10 rounded shadow-xs overflow-x-auto">
+          <div className="bg-white border border-slate-200 rounded shadow-sm overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-navy text-white text-[10px] font-bold uppercase tracking-wider border-b border-gold">
-                  <th className="py-3 px-4">Reference</th>
-                  <th className="py-3 px-4">Type</th>
-                  <th className="py-3 px-4">Landed Cost</th>
-                  <th className="py-3 px-4">Date Filed</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+                <tr className="bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wider border-b border-amber-500">
+                  <th className="py-3.5 px-4">Reference</th>
+                  <th className="py-3.5 px-4">Type</th>
+                  <th className="py-3.5 px-4">Landed Cost</th>
+                  <th className="py-3.5 px-4">Date Filed</th>
+                  <th className="py-3.5 px-4">Status</th>
+                  <th className="py-3.5 px-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-navy/5 text-xs font-medium">
-                {consignments.map((ship) => (
-                  <tr key={ship._id} className="hover:bg-off-white/50 transition-colors">
-                    <td className="py-3.5 px-4 font-mono font-bold text-navy">{ship.consignment_ref}</td>
-                    <td className="py-3.5 px-4 uppercase text-[10px] tracking-wider">
-                      <span className={`px-2 py-0.5 rounded font-bold ${
-                        ship.type === 'direct_container' ? 'bg-blue-50 text-blue-700 border border-blue-100' : 'bg-purple-50 text-purple-700 border border-purple-100'
+              <tbody className="divide-y divide-slate-100 text-xs font-medium text-slate-700">
+                {consignments.map((item) => (
+                  <tr key={item._id} className="hover:bg-neutral-50/80 transition-colors">
+                    <td className="py-4 px-4 font-mono font-bold text-slate-900">{item.consignment_ref || 'N/A'}</td>
+                    <td className="py-4 px-4 text-[10px] uppercase font-bold tracking-wider">
+                      <span className={`px-2 py-0.5 rounded ${
+                        item.type === 'direct_container' ? 'bg-indigo-50 text-indigo-700' : 'bg-fuchsia-50 text-fuchsia-700'
                       }`}>
-                        {ship.type.replace('_', ' ')}
+                        {(item.type || 'N/A').replace('_', ' ')}
                       </span>
                     </td>
-                    <td className="py-3.5 px-4 font-bold">
-                      {ship.total_landing_cost?.toLocaleString() || 0}
+                    <td className="py-4 px-4 font-bold text-slate-950">
+                      {item.total_landing_cost ? Number(item.total_landing_cost).toLocaleString() : '0'}
                     </td>
-                    <td className="py-3.5 px-4 text-navy/60">{ship.arrival_date ? new Date(ship.arrival_date).toLocaleDateString() : 'N/A'}</td>
-                    <td className="py-3.5 px-4 uppercase text-[10px]">
-                      <span className={`font-bold ${ship.status === 'completed' ? 'text-green-600' : 'text-amber-600'}`}>
-                        ● {ship.status}
+                    <td className="py-4 px-4 text-slate-500">
+                      {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : new Date().toLocaleDateString()}
+                    </td>
+                    <td className="py-4 px-4 uppercase text-[10px] font-bold">
+                      <span className={item.status === 'completed' ? 'text-green-600' : 'text-amber-600'}>
+                        ● {item.status || 'active'}
                       </span>
                     </td>
-                    <td className="py-3.5 px-4 text-right">
-                      {ship.type === 'giant_bale' && ship.status !== 'completed' ? (
-                        <button 
-                          onClick={() => { setActiveSortShip(ship); setShowSortModal(true); }}
-                          className="bg-navy text-gold text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded hover:bg-navy/90 cursor-pointer transition-all"
-                        >
-                          Process Sorting Run
-                        </button>
-                      ) : (
-                        <span className="text-navy/40 text-[10px] font-bold italic uppercase">Logged</span>
-                      )}
+                    <td className="py-4 px-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => startModification(item)}
+                        className="bg-slate-100 text-slate-900 hover:bg-amber-500 hover:text-slate-950 border border-slate-200 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded transition flex items-center gap-1 ml-auto cursor-pointer"
+                      >
+                        <Edit size={10} /> Modify Manifest
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -382,246 +283,6 @@ export default function Consignments() {
           </div>
         )}
       </main>
-
-      {/* --- SORTING MODAL WITH INTERACTIVE UNITS --- */}
-      {showSortModal && (
-        <div className="fixed inset-0 bg-navy/60 backdrop-blur-xs flex justify-center items-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded border-t-4 border-gold max-w-4xl w-full p-6 shadow-2xl animate-fadeIn text-navy my-8">
-            
-            <div className="flex justify-between items-center mb-4 pb-2 border-b border-navy/5">
-              <h3 className="font-serif text-xl font-bold flex items-center gap-2">
-                <Layers size={22} className="text-gold" /> Process Sorting Manifest: {activeSortShip?.consignment_ref}
-              </h3>
-              <button 
-                onClick={() => setShowSortModal(false)}
-                className="text-navy/60 hover:text-navy transition border-none bg-transparent cursor-pointer"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            
-            <p className="text-xs text-navy/60 mb-6">
-              Establish output metrics for this sorted Giant Bale. Adding product codes and weights dynamically updates central master stock catalogs.
-            </p>
-            
-            <form onSubmit={handleSortSubmit} className="space-y-6">
-              
-              {/* SECTION 1: DYNAMIC PACKED BALES */}
-              <div>
-                <div className="flex justify-between items-center mb-3">
-                  <h4 className="text-xs font-bold uppercase tracking-widest text-navy border-b-2 border-gold/40 pb-1">
-                    1. Sorted Product Bales (Units)
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={handleAddSortedItem}
-                    className="text-gold hover:text-gold/80 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 border-none bg-transparent cursor-pointer"
-                  >
-                    <Plus size={12} /> Add Item Code
-                  </button>
-                </div>
-
-                {/* DESKTOP TABLE HEADER */}
-                <div className="hidden md:grid grid-cols-12 gap-2 px-2 pb-2 border-b border-navy/10 mb-2">
-                  <div className="col-span-3 text-[10px] font-bold uppercase tracking-wider text-navy/60">Item (Product Code)</div>
-                  <div className="col-span-3 text-[10px] font-bold uppercase tracking-wider text-navy/60">Standard Size</div>
-                  <div className="col-span-3 text-[10px] font-bold uppercase tracking-wider text-navy/60">Actual Size</div>
-                  <div className="col-span-2 text-[10px] font-bold uppercase tracking-wider text-navy/60">Bales Produced</div>
-                  <div className="col-span-1"></div>
-                </div>
-
-                <div className="space-y-3">
-                  {sortedItems.map((item, index) => {
-                    return (
-                      <div key={index} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center bg-off-white/50 p-2 rounded border border-navy/5">
-                        
-                        {/* 1. Item Code Input */}
-                        <div className="md:col-span-3">
-                          <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Item (Product Code)</label>
-                          <input 
-                            type="text" 
-                            required
-                            placeholder="e.g., LMD, PODR"
-                            value={item.product_ref}
-                            onChange={(e) => handleSortedItemChange(index, 'product_ref', e.target.value)}
-                            className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider focus:outline-none focus:border-gold"
-                          />
-                        </div>
-                        
-                        {/* 2. Standard Size Input */}
-                        <div className="md:col-span-3">
-                          <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Standard Size</label>
-                          <div className="relative flex items-center">
-                            <input 
-                              type="number" 
-                              required
-                              placeholder="Standard size"
-                              value={item.target_weight_g_bale}
-                              onChange={(e) => handleSortedItemChange(index, 'target_weight_g_bale', e.target.value)}
-                              className="w-full bg-white border border-navy/10 rounded pl-2.5 pr-14 py-1.5 text-xs focus:outline-none focus:border-gold"
-                            />
-                            {/* FIXED: One unified master selector box for the row context */}
-                            <select
-                              value={item.unit}
-                              onChange={(e) => handleSortedItemChange(index, 'unit', e.target.value)}
-                              className="absolute right-1 text-[9px] font-extrabold uppercase tracking-wider text-gold bg-navy hover:bg-navy/90 border-none rounded px-1.5 py-0.5 outline-none cursor-pointer"
-                            >
-                              <option value="KGS">KG</option>
-                              <option value="PCS">PCS</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        {/* 3. Actual Size Input */}
-                        <div className="md:col-span-3">
-                          <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Actual Size</label>
-                          <div className="relative flex items-center">
-                            <input 
-                              type="number" 
-                              required
-                              placeholder="Actual size"
-                              value={item.actual_weight_g_bale}
-                              onChange={(e) => handleSortedItemChange(index, 'actual_weight_g_bale', e.target.value)}
-                              className="w-full bg-white border border-navy/10 rounded pl-2.5 pr-14 py-1.5 text-xs focus:outline-none focus:border-gold"
-                            />
-                            {/* FIXED: Synchronized cleanly with the parent row unit context */}
-                            <select
-                              value={item.unit}
-                              onChange={(e) => handleSortedItemChange(index, 'unit', e.target.value)}
-                              className="absolute right-1 text-[9px] font-extrabold uppercase tracking-wider text-gold bg-navy hover:bg-navy/90 border-none rounded px-1.5 py-0.5 outline-none cursor-pointer"
-                            >
-                              <option value="KGS">KG</option>
-                              <option value="PCS">PCS</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        {/* 4. Number of Units/Bales */}
-                        <div className="md:col-span-2">
-                          <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Bales Produced</label>
-                          <div className="relative flex items-center">
-                            <input 
-                              type="number" 
-                              required
-                              min="1"
-                              placeholder="Qty"
-                              value={item.bales_produced}
-                              onChange={(e) => handleSortedItemChange(index, 'bales_produced', e.target.value)}
-                              className="w-full bg-white border border-navy/10 rounded pl-2.5 pr-12 py-1.5 text-xs font-bold focus:outline-none"
-                            />
-                            <span className="absolute right-2.5 text-[8px] font-extrabold uppercase text-navy/40">
-                              {item.unit === 'PCS' ? 'UNITS' : 'BALES'}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="md:col-span-1 text-right">
-                          {sortedItems.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveSortedItem(index)}
-                              className="text-red-500 hover:text-red-700 p-1 border-none bg-transparent cursor-pointer"
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* SECTION 2: DYNAMIC BYPRODUCTS */}
-              <div>
-                <div className="flex justify-between items-center mb-3">
-                  <h4 className="text-xs font-bold uppercase tracking-widest text-navy border-b-2 border-gold/40 pb-1">
-                    2. Sacked Byproduct Yields (Loose weight)
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={handleAddByproduct}
-                    className="text-gold hover:text-gold/80 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 border-none bg-transparent cursor-pointer"
-                  >
-                    <Plus size={12} /> Add Byproduct Type
-                  </button>
-                </div>
-
-                <div className="space-y-3">
-                  {byproductsSacked.map((by, index) => (
-                    <div key={index} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center bg-off-white/50 p-2 rounded border border-navy/5">
-                      <div className="md:col-span-4">
-                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Byproduct Group</label>
-                        <input 
-                          type="text" 
-                          placeholder="e.g., TROUSERS, HOUSEHOLDS"
-                          value={by.byproduct_type}
-                          onChange={(e) => handleByproductChange(index, 'byproduct_type', e.target.value)}
-                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs font-bold uppercase tracking-wider focus:outline-none focus:border-gold"
-                        />
-                      </div>
-
-                      <div className="md:col-span-4">
-                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Total Weight (KG)</label>
-                        <input 
-                          type="number" 
-                          step="0.01"
-                          placeholder="Total weight (KG)"
-                          value={by.weight_kg}
-                          onChange={(e) => handleByproductChange(index, 'weight_kg', e.target.value)}
-                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-gold"
-                        />
-                      </div>
-
-                      <div className="md:col-span-3">
-                        <label className="block md:hidden text-[9px] font-bold uppercase text-navy/40">Target Price / KG</label>
-                        <input 
-                          type="number" 
-                          placeholder="Selling Price per KG"
-                          value={by.price_per_kg}
-                          onChange={(e) => handleByproductChange(index, 'price_per_kg', e.target.value)}
-                          className="w-full bg-white border border-navy/10 rounded px-2.5 py-1.5 text-xs focus:outline-none focus:border-gold"
-                        />
-                      </div>
-
-                      <div className="md:col-span-1 text-right">
-                        {byproductsSacked.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveByproduct(index)}
-                            className="text-red-500 hover:text-red-700 p-1 border-none bg-transparent cursor-pointer"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* FOOTER ACTIONS */}
-              <div className="flex justify-end gap-3 pt-4 border-t border-navy/5">
-                <button 
-                  type="button" 
-                  onClick={() => setShowSortModal(false)}
-                  className="text-navy/60 hover:text-navy text-xs font-bold uppercase tracking-wider px-3 py-2 cursor-pointer border-none bg-transparent"
-                >
-                  Cancel
-                </button>
-                <button 
-                  type="submit" 
-                  disabled={sortLoading}
-                  className="bg-navy text-gold hover:bg-navy/90 font-bold text-xs uppercase tracking-wider px-6 py-2.5 rounded transition flex items-center gap-2 cursor-pointer shadow-md border-none"
-                >
-                  {sortLoading ? <Loader2 className="animate-spin" size={14} /> : "Write to Database"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }

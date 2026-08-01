@@ -1,20 +1,20 @@
 // src/components/ProtectedRoute.jsx
+import React from 'react';
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-/**
- * Security wrapper that forces unauthenticated sessions back to the login gateway.
- */
-const ProtectedRoute = () => {
-  const { isAuthenticated } = useAuth();
+export default function ProtectedRoute() {
+  const { isAuthenticated, loading } = useAuth();
 
-  // If the security engine confirms no active profile, force-route to login
-  if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+  // Prevent flash redirection while the session token verification pipeline resolves
+  if (loading) {
+    return (
+      <div className="p-6 font-mono text-xs text-gray-400 animate-pulse bg-off-white min-h-screen flex items-center justify-center">
+        Verifying secure terminal clearance...
+      </div>
+    );
   }
 
-  // If authorized, load the child route component seamlessly
-  return <Outlet />;
-};
-
-export default ProtectedRoute;
+  // Enforce secure boundaries: stream child components or bounce to login portal
+  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />;
+}

@@ -5,9 +5,8 @@ import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login } = useAuth(); // 👈 Tap into our centralized login system
+  const { login } = useAuth();
 
-  // Local component states for form inputs
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
@@ -25,14 +24,11 @@ export default function Login() {
     }
 
     try {
-      // Execute network login request via our centralized Auth Context
       const result = await login(email, password);
 
       if (result.success) {
-        // Direct the authenticated manager into the live dashboard console
         navigate('/dashboard');
       } else {
-        // Display the specific error message returned by the backend layout
         setError(result.message);
       }
     } catch (err) {
@@ -63,7 +59,7 @@ export default function Login() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="text-[11px] font-bold uppercase tracking-wider text-gray-500 block mb-1">
-              Admin Email Address
+              User / Admin Email Address
             </label>
             <input
               type="text"
@@ -100,7 +96,7 @@ export default function Login() {
           </button>
         </form>
 
-        {/* Quick Link back to public corporate website */}
+        {/* Return Link */}
         <div className="text-center pt-2 border-t border-gray-100">
           <button 
             onClick={() => navigate('/')}

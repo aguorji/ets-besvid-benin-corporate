@@ -16,14 +16,18 @@ export const AuthProvider = ({ children }) => {
       
       if (token && storedUser && storedUser !== "undefined") {
         try {
-          setUser(JSON.parse(storedUser));
+          const parsed = JSON.parse(storedUser);
+          // Ensure token is attached inside user object for role/route guards
+          setUser({ ...parsed, token });
         } catch (error) {
           localStorage.removeItem('ets_token');
           localStorage.removeItem('ets_user');
+          localStorage.removeItem('userInfo');
         }
       } else {
         localStorage.removeItem('ets_token');
         localStorage.removeItem('ets_user');
+        localStorage.removeItem('userInfo');
       }
       setLoading(false);
     };
@@ -37,19 +41,20 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       const response = await apiClient.post('/auth/login', { email, password });
-      const { token, ...userData } = response.data;
+      const data = response.data;
 
-      if (!token) {
+      if (!data.token) {
         throw new Error("No token returned from server structure.");
       }
 
-      localStorage.setItem('ets_token', token);
-      localStorage.setItem('ets_user', JSON.stringify(userData));
+      // Store both for Axios client and backward compatibility with page components
+      localStorage.setItem('ets_token', data.token);
+      localStorage.setItem('ets_user', JSON.stringify(data));
+      localStorage.setItem('userInfo', JSON.stringify(data));
       
-      setUser(userData);
-      return { success: true };
+      setUser(data);
+      return { success: true, user: data };
     } catch (error) {
-      // FIX: Capture error.response.data.error to match your Express backend controller
       const backendMessage = error.response?.data?.error || error.response?.data?.message;
       
       return {
@@ -63,6 +68,7 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     localStorage.removeItem('ets_token');
     localStorage.removeItem('ets_user');
+    localStorage.removeItem('userInfo');
     setUser(null);
     window.location.href = '/login';
   };
@@ -74,7 +80,6 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
-// Custom hook for rapid context deployment across UI panels
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {

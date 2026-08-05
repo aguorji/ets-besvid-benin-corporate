@@ -19,6 +19,8 @@ import saleRoutes from './routes/saleRoutes.js';
 import expenseRoutes from './routes/expenseRoutes.js';
 import byproductRoutes from './routes/byproductRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
+import userRoutes from './routes/userRoutes.js';
+
 
 const app = express();
 
@@ -43,6 +45,7 @@ app.use('/api/sales', saleRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/byproducts', byproductRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/users', userRoutes);
 
 
 // 2. Database Connection Handling Engine

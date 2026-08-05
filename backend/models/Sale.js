@@ -1,19 +1,25 @@
 import mongoose from 'mongoose';
 
 const SaleItemSchema = new mongoose.Schema({
-  // Connected directly to your product inventory variant layout
+  // Connected directly to your product inventory variant layout (Optional for Byproducts)
   product_id: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'ProductItem', 
-    required: true 
+    required: false 
   },
   production_ref: { 
     type: String, 
-    required: true 
+    required: false 
   },
   consignment_id: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Consignment', 
+    required: false 
+  },
+  
+  // Added to differentiate standard goods from byproducts
+  item_name: { 
+    type: String, 
     required: true 
   },
   
@@ -23,7 +29,7 @@ const SaleItemSchema = new mongoose.Schema({
   },
   actual_size: { 
     type: Number, 
-    required: true 
+    required: false 
   },
   quantity_sold: { 
     type: Number, 
@@ -32,7 +38,8 @@ const SaleItemSchema = new mongoose.Schema({
   },
   set_price: { 
     type: Number, 
-    required: true 
+    required: false,
+    default: 0 
   },
   selling_price: { 
     type: Number, 
@@ -51,11 +58,18 @@ const SaleItemSchema = new mongoose.Schema({
   },
   performance: { 
     type: String, 
-    enum: ['Above Target', 'On Target', 'Below Target'] 
+    enum: ['Above Target', 'On Target', 'Below Target'],
+    default: 'On Target'
   }
 });
 
 const SaleSchema = new mongoose.Schema({
+  // Category tag to isolate main commercial sales from byproduct salvage
+  sale_type: {
+    type: String,
+    enum: ['Standard', 'Byproduct'],
+    default: 'Standard'
+  },
   customer_name: { 
     type: String, 
     required: true 
@@ -92,6 +106,7 @@ const SaleSchema = new mongoose.Schema({
     default: 'N/A' 
   },
   
+  // Crucial: Tracks which staff member processed this invoice
   recorded_by: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User', 
@@ -109,7 +124,7 @@ SaleSchema.pre('save', function(next) {
     // ⚖️ Weight Variance Engine: Evaluate deviation from target standard weights
     const expectedStandardMass = item.quantity_sold * STANDARD_WEIGHT;
 
-    if (item.actual_size && Number(item.actual_size) !== expectedStandardMass) {
+    if (item.actual_size && Number(item.actual_size) !== expectedStandardMass && item.set_price > 0) {
       // Dynamic scaling for exact fractional or variable weight metrics
       const effectivePricePerKg = item.selling_price / STANDARD_WEIGHT;
       const effectiveTargetPricePerKg = item.set_price / STANDARD_WEIGHT;
@@ -117,13 +132,12 @@ SaleSchema.pre('save', function(next) {
       const rawRevenue = Number(item.actual_size) * effectivePricePerKg;
       const rawVariance = (effectivePricePerKg - effectiveTargetPricePerKg) * Number(item.actual_size);
 
-      // Secure clean two-decimal financial currency boundaries
       item.revenue = Math.round(rawRevenue * 100) / 100;
       item.variance = Math.round(rawVariance * 100) / 100;
     } else {
-      // Clean processing rules for standard uniform packaging batches
+      // Clean processing rules for standard items and byproducts
       item.revenue = item.quantity_sold * item.selling_price;
-      item.variance = (item.selling_price - item.set_price) * item.quantity_sold;
+      item.variance = (item.selling_price - (item.set_price || item.selling_price)) * item.quantity_sold;
     }
 
     // Determine performance health indicators

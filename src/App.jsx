@@ -10,7 +10,7 @@ import About from './pages/About';
 import Contact from './pages/Contact';
 import Team from './pages/Team';
 
-// Administrative Protected Pages
+// Administrative & Protected Pages
 import Login from './pages/Login';
 import Consignments from './pages/Consignments';  
 import Dashboard from './pages/Dashboard';
@@ -18,13 +18,39 @@ import PriceListManager from './pages/PriceListManager';
 import SalesLedger from './pages/SalesLedger';
 import ConsignmentReconciliation from './pages/ConsignmentReconciliation';
 import AuditLogs from './pages/AuditLogs';
+import StaffTerminal from './pages/StaffTerminal';
+import UserManagement from './pages/UserManagement';
 
-// Standalone Security Layout Wrapper
+// Standalone Security Layout Wrapper & Auth Context
 import ProtectedRoute from './components/ProtectedRoute';
+import { useAuth } from './context/AuthContext';
+
+/**
+ * 🎓 Role Dispatcher Component
+ * Directs 'user' (staff) accounts to the simplified Staff Terminal
+ * and 'admin' accounts to the main Executive Dashboard.
+ */
+const RoleBasedDashboard = () => {
+  const { user } = useAuth();
+
+  if (user?.role === 'user') {
+    return <StaffTerminal user={user} />;
+  }
+
+  return <Dashboard user={user} />;
+};
+
+/**
+ * 🔒 Admin Guard Component
+ * Restricts sensitive administrative management views strictly to Admin role.
+ */
+const AdminOnlyRoute = ({ children }) => {
+  const { user } = useAuth();
+  return user?.role === 'admin' ? children : <Navigate to="/dashboard" replace />;
+};
 
 /**
  * 🏢 Public Navigation Master Frame Layout
- * (Kept completely clean of administrative internal pages)
  */
 const PublicLayout = ({ children }) => {
   const navigate = useNavigate();
@@ -69,17 +95,24 @@ export default function App() {
         <Route path="/contact" element={<PublicLayout><Contact /></PublicLayout>} />
         <Route path="/about" element={<PublicLayout><About /></PublicLayout>} />
 
-        {/* 2. Isolated Administrative Portal Routes */}
+        {/* 2. Isolated Authentication Route */}
         <Route path="/login" element={<Login />} />
 
-        {/* 3. Securely Protected Ledger Dashboard Matrix (Layout Nesting Strategy) */}
+        {/* 3. Secure Protected App Matrix */}
         <Route element={<ProtectedRoute />}>
-          <Route path="/dashboard" element={<Dashboard />} />
+          {/* Automatic Role Dispatcher: Staff -> StaffTerminal, Admin -> Executive Dashboard */}
+          <Route path="/dashboard" element={<RoleBasedDashboard />} />
+          <Route path="/terminal" element={<StaffTerminal />} />
+
+          {/* Shared Operational Views */}
           <Route path="/consignments" element={<Consignments />} />
           <Route path="/pricelist" element={<PriceListManager />} />
           <Route path="/salesledger" element={<SalesLedger />} />
           <Route path="/consignment-reconciliation/:id" element={<ConsignmentReconciliation />} />
-          <Route path="/audit-logs" element={<AuditLogs />} />
+
+          {/* Admin Restricted Views */}
+          <Route path="/users" element={<AdminOnlyRoute><UserManagement /></AdminOnlyRoute>} />
+          <Route path="/audit-logs" element={<AdminOnlyRoute><AuditLogs /></AdminOnlyRoute>} />
         </Route>
 
         {/* Catch-all Fallback */}

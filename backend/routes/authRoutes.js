@@ -1,13 +1,13 @@
 import express from 'express';
 import { loginUser, createStaffAccount } from '../controllers/authController.js';
-import { protectGate, restrictTo } from '../middleware/authSecurity.js';
+import { protectRoute, adminOnly } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Public route for authentication sessions
+// Public route for login sessions
 router.post('/login', loginUser);
 
-// Secured administrative endpoint protecting staff generation
-router.post('/create-staff', protectGate, restrictTo('admin'), createStaffAccount);
+// Secured administrative route for staff account creation
+router.post('/create-staff', protectRoute, adminOnly, createStaffAccount);
 
 export default router;

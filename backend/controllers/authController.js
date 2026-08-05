@@ -13,14 +13,15 @@ export const loginUser = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const user = await User.findOne({ email });
+    const cleanEmail = email ? email.toLowerCase().trim() : '';
+    const user = await User.findOne({ email: cleanEmail });
 
     if (user && (await user.matchPassword(password))) {
       if (!user.is_active) {
         return res.status(401).json({ error: "Access Denied: Account profile is deactivated." });
       }
 
-      res.status(200).json({
+      return res.status(200).json({
         _id: user._id,
         name: user.name,
         email: user.email,
@@ -28,31 +29,32 @@ export const loginUser = async (req, res) => {
         token: generateToken(user._id)
       });
     } else {
-      res.status(401).json({ error: "Invalid email or password credentials." });
+      return res.status(401).json({ error: "Invalid email or password credentials." });
     }
   } catch (error) {
-    res.status(500).json({ error: "Authentication system failure." });
+    return res.status(500).json({ error: "Authentication system failure." });
   }
 };
 
 // @desc     Admin Only: Create New Staff Accounts
 // @route    POST /api/auth/create-staff
 // @access   Private/Admin
-// backend/controllers/authController.js
 export const createStaffAccount = async (req, res) => {
   const { name, email, password, role } = req.body;
 
   try {
-    const userExists = await User.findOne({ email });
+    const cleanEmail = email ? email.toLowerCase().trim() : '';
+
+    const userExists = await User.findOne({ email: cleanEmail });
     if (userExists) {
       return res.status(400).json({ error: "A user profile with this email already exists." });
     }
 
-    // Add this missing execution logic to write the account to MongoDB:
+    // User Schema pre('save') hook handles password hashing automatically
     const newStaff = await User.create({
       name,
-      email,
-      password, // User Schema pre('save') hook handles the bcrypt hashing automatically!
+      email: cleanEmail,
+      password,
       role: role || 'user'
     });
 
@@ -65,6 +67,6 @@ export const createStaffAccount = async (req, res) => {
     });
 
   } catch (error) {
-    res.status(500).json({ error: "Failed to initialize staff profile." });
+    return res.status(500).json({ error: "Failed to initialize staff profile." });
   }
 };

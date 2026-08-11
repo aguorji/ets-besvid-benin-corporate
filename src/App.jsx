@@ -23,7 +23,7 @@ import UserManagement from './pages/UserManagement';
 
 // Standalone Security Layout Wrapper & Auth Context
 import ProtectedRoute from './components/ProtectedRoute';
-import { useAuth } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 
 /**
  * 🎓 Role Dispatcher Component
@@ -85,39 +85,41 @@ const PublicLayout = ({ children }) => {
 
 export default function App() {
   return (
-    <Router>
-      <Routes>
-        {/* 1. Public Corporate Front Facing Routes */}
-        <Route path="/" element={<PublicLayout><Home /></PublicLayout>} />
-        <Route path="/products" element={<PublicLayout><Products /></PublicLayout>} />
-        <Route path="/services" element={<PublicLayout><Services /></PublicLayout>} />
-        <Route path="/team" element={<PublicLayout><Team /></PublicLayout>} />
-        <Route path="/contact" element={<PublicLayout><Contact /></PublicLayout>} />
-        <Route path="/about" element={<PublicLayout><About /></PublicLayout>} />
+    <AuthProvider>
+      <Router>
+        <Routes>
+          {/* 1. Public Corporate Front Facing Routes */}
+          <Route path="/" element={<PublicLayout><Home /></PublicLayout>} />
+          <Route path="/products" element={<PublicLayout><Products /></PublicLayout>} />
+          <Route path="/services" element={<PublicLayout><Services /></PublicLayout>} />
+          <Route path="/team" element={<PublicLayout><Team /></PublicLayout>} />
+          <Route path="/contact" element={<PublicLayout><Contact /></PublicLayout>} />
+          <Route path="/about" element={<PublicLayout><About /></PublicLayout>} />
 
-        {/* 2. Isolated Authentication Route */}
-        <Route path="/login" element={<Login />} />
+          {/* 2. Isolated Authentication Route */}
+          <Route path="/login" element={<Login />} />
 
-        {/* 3. Secure Protected App Matrix */}
-        <Route element={<ProtectedRoute />}>
-          {/* Automatic Role Dispatcher: Staff -> StaffTerminal, Admin -> Executive Dashboard */}
-          <Route path="/dashboard" element={<RoleBasedDashboard />} />
-          <Route path="/terminal" element={<StaffTerminal />} />
+          {/* 3. Secure Protected App Matrix */}
+          <Route element={<ProtectedRoute />}>
+            {/* Automatic Role Dispatcher: Staff -> StaffTerminal, Admin -> Executive Dashboard */}
+            <Route path="/dashboard" element={<RoleBasedDashboard />} />
+            <Route path="/terminal" element={<StaffTerminal />} />
 
-          {/* Shared Operational Views */}
-          <Route path="/consignments" element={<Consignments />} />
-          <Route path="/pricelist" element={<PriceListManager />} />
-          <Route path="/salesledger" element={<SalesLedger />} />
-          <Route path="/consignment-reconciliation/:id" element={<ConsignmentReconciliation />} />
+            {/* Shared Operational Views */}
+            <Route path="/consignments" element={<Consignments />} />
+            <Route path="/pricelist" element={<PriceListManager />} />
+            <Route path="/salesledger" element={<SalesLedger />} />
+            <Route path="/consignment-reconciliation/:id" element={<ConsignmentReconciliation />} />
 
-          {/* Admin Restricted Views */}
-          <Route path="/users" element={<AdminOnlyRoute><UserManagement /></AdminOnlyRoute>} />
-          <Route path="/audit-logs" element={<AdminOnlyRoute><AuditLogs /></AdminOnlyRoute>} />
-        </Route>
+            {/* Admin Restricted Views */}
+            <Route path="/users" element={<AdminOnlyRoute><UserManagement /></AdminOnlyRoute>} />
+            <Route path="/audit-logs" element={<AdminOnlyRoute><AuditLogs /></AdminOnlyRoute>} />
+          </Route>
 
-        {/* Catch-all Fallback */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Router>
+          {/* Catch-all Fallback */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Router>
+    </AuthProvider>
   );
 }

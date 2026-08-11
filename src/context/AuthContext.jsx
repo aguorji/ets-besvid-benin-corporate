@@ -8,55 +8,72 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Check for an existing token on app initialization
   useEffect(() => {
     const initializeAuth = () => {
-      const token = localStorage.getItem('ets_token');
-      const storedUser = localStorage.getItem('ets_user');
-      
-      if (token && storedUser && storedUser !== "undefined") {
-        try {
+      try {
+        // Check multiple fallback storage names used across components
+        const token = localStorage.getItem('ets_token') || localStorage.getItem('token');
+        const storedUser = localStorage.getItem('ets_user') || localStorage.getItem('userInfo');
+        
+        if (token && storedUser && storedUser !== "undefined") {
           const parsed = JSON.parse(storedUser);
-          // Ensure token is attached inside user object for role/route guards
-          setUser({ ...parsed, token });
-        } catch (error) {
+          const normalizedUser = {
+            id: parsed.id || parsed._id || parsed.user?._id,
+            name: parsed.name || parsed.user?.name,
+            email: parsed.email || parsed.user?.email,
+            role: parsed.role || parsed.user?.role || 'user',
+            token: token
+          };
+
+          // Synchronize keys so both client and context match
+          localStorage.setItem('ets_token', token);
+          localStorage.setItem('ets_user', JSON.stringify(normalizedUser));
+          
+          setUser(normalizedUser);
+        } else {
           localStorage.removeItem('ets_token');
           localStorage.removeItem('ets_user');
           localStorage.removeItem('userInfo');
+          setUser(null);
         }
-      } else {
-        localStorage.removeItem('ets_token');
-        localStorage.removeItem('ets_user');
-        localStorage.removeItem('userInfo');
+      } catch (error) {
+        console.error("Auth initialization error:", error);
+        localStorage.clear();
+        setUser(null);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     initializeAuth();
   }, []);
 
-  /**
-   * Handles user authentication submission.
-   */
   const login = async (email, password) => {
     try {
       const response = await apiClient.post('/auth/login', { email, password });
       const data = response.data;
+      const token = data.token || data.accessToken;
 
-      if (!data.token) {
+      if (!token) {
         throw new Error("No token returned from server structure.");
       }
 
-      // Store both for Axios client and backward compatibility with page components
-      localStorage.setItem('ets_token', data.token);
-      localStorage.setItem('ets_user', JSON.stringify(data));
-      localStorage.setItem('userInfo', JSON.stringify(data));
+      const userPayload = {
+        id: data.id || data._id || data.user?._id,
+        name: data.name || data.user?.name,
+        email: data.email || data.user?.email,
+        role: data.role || data.user?.role || 'user',
+        token: token
+      };
+
+      localStorage.setItem('ets_token', token);
+      localStorage.setItem('ets_user', JSON.stringify(userPayload));
+      localStorage.setItem('userInfo', JSON.stringify(userPayload));
       
-      setUser(data);
-      return { success: true, user: data };
+      setUser(userPayload);
+      return { success: true, user: userPayload };
     } catch (error) {
       const backendMessage = error.response?.data?.error || error.response?.data?.message;
-      
       return {
         success: false,
         message: backendMessage || 'Authentication failed. Server unreachable.'
@@ -64,7 +81,6 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Log user out and wipe local credentials cleanly
   const logout = () => {
     localStorage.removeItem('ets_token');
     localStorage.removeItem('ets_user');

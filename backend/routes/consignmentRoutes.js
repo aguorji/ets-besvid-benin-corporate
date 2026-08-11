@@ -1,3 +1,4 @@
+// backend/routes/consignmentRoutes.js
 import express from 'express';
 import mongoose from 'mongoose';
 
@@ -6,11 +7,59 @@ import Consignment from '../models/Consignment.js';
 import Sale from '../models/Sale.js'; 
 import Expense from '../models/Expense.js';
 import Byproduct from '../models/Byproduct.js';
+import ProductItem from '../models/ProductItem.js'; // 👈 Added for Product Catalog Sync
 
 const router = express.Router();
 
+// Helper function to sync consignment production items into the master ProductItem catalog
+async function syncProductionToProducts(productionItems, consignmentRef) {
+  if (!productionItems || !Array.isArray(productionItems)) return;
+
+  for (const row of productionItems) {
+    const itemCode = (row.itemCode || '').toUpperCase().trim();
+    if (!itemCode) continue;
+
+    const quantityBales = Number(row.balesQuantity || row.quantity || 0);
+    const basePrice = Number(row.adjustedPrice || row.priceStd || row.price || 0);
+
+    // 1. Find the root product or create it if it doesn't exist yet
+    let product = await ProductItem.findOne({ itemCode });
+    
+    if (!product) {
+      product = await ProductItem.create({
+        itemCode,
+        description: row.description || itemCode,
+        unit: row.unit || 'Bales',
+        standardSize: row.standardSize || 0,
+        stock_variations: []
+      });
+    }
+
+    // 2. Check if this specific batch reference already exists in stock_variations
+    const existingBatchIndex = product.stock_variations.findIndex(
+      v => v.production_ref === consignmentRef
+    );
+
+    if (existingBatchIndex > -1) {
+      // Update existing batch balance
+      product.stock_variations[existingBatchIndex].quantity_produced = quantityBales;
+      product.stock_variations[existingBatchIndex].quantity_balance = quantityBales;
+      product.stock_variations[existingBatchIndex].base_price = basePrice;
+    } else {
+      // Push new batch/consignment variation
+      product.stock_variations.push({
+        production_ref: consignmentRef,
+        quantity_produced: quantityBales,
+        quantity_balance: quantityBales, // Crucial for terminal stock checking!
+        base_price: basePrice
+      });
+    }
+
+    await product.save();
+  }
+}
+
 // GET: Stream all raw active manifests down to the dashboard run timeline
-// Matches: GET /api/consignments
 router.get('/', async (req, res) => {
   try {
     const list = await Consignment.find().sort({ createdAt: -1 });
@@ -20,32 +69,37 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST: Parse manifest input structures securely into MongoDB instance
-// Matches: POST /api/consignments
+// POST: Parse manifest input structures securely into MongoDB instance & sync catalog
 router.post('/', async (req, res) => {
   try {
+    const consignmentRef = req.body.consignment_ref;
+    const productionItems = req.body.production_items || [];
+
     const newManifest = new Consignment({
-      consignment_ref: req.body.consignment_ref,
+      consignment_ref: consignmentRef,
       vessel_name: req.body.vessel_name,
-      type: req.body.type,               // 'giant_bale' or 'direct_container'
-      sub_type: req.body.sub_type || '', // 'Shoes', 'Bags', etc.
+      type: req.body.type,                  
+      sub_type: req.body.sub_type || '', 
       total_bales_received: Number(req.body.total_bales_received) || 0,
       total_weight_received: Number(req.body.total_weight_received) || 0,
       total_landing_cost: Number(req.body.total_landing_cost) || 0,
       status: req.body.status || 'active',
-      production_items: req.body.production_items || [],
+      production_items: productionItems,
       byproducts_yielded: req.body.byproducts_yielded || []
     });
 
     const saved = await newManifest.save();
+
+    // 🔄 Automatically sync items to the Product Catalog for the Staff Terminal
+    await syncProductionToProducts(productionItems, consignmentRef);
+
     res.status(201).json(saved);
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
 });
 
-// PUT: Standard Manifest Profile Update Route (Kept from original to prevent frontend breakage)
-// Matches: PUT /api/consignments/:id
+// PUT: Standard Manifest Profile Update Route
 router.put('/:id', async (req, res) => {
   try {
     const updated = await Consignment.findByIdAndUpdate(req.params.id, req.body, { new: true });
@@ -57,25 +111,21 @@ router.put('/:id', async (req, res) => {
 });
 
 // GET: Core Financial Reconciliation and Combined Ledger Processing Matrix
-// Matches: GET /api/consignments/reconciliation/:id
 router.get('/reconciliation/:id', async (req, res) => {
   try {
     const cId = new mongoose.Types.ObjectId(req.params.id);
     const manifest = await Consignment.findById(cId);
     if (!manifest) return res.status(404).json({ message: 'Target profile missing from ledger trees.' });
 
-    // Fetch child items tied to this specific consignment ID
     const sales = await Sale.find({ consignmentId: cId });
     const expenses = await Expense.find({ consignmentId: cId });
     const byproducts = await Byproduct.find({ consignmentId: cId });
 
-    // 1. Calculate Financial Matrices
     let totalBaleRevenue = 0;
     let totalDebt = 0;
     let totalReceivedCash = 0;
 
     sales.forEach(sale => {
-      // Handle array items if structured as multi-item invoices, otherwise fall back to single records
       const invoiceItems = sale.items || [{ qty: sale.qty, sellingPrice: sale.sellingPrice }];
       let invoiceTotal = invoiceItems.reduce((sum, item) => sum + ((item.qty || 0) * (item.sellingPrice || 0)), 0);
       
@@ -96,10 +146,8 @@ router.get('/reconciliation/:id', async (req, res) => {
     const aggregateExpenses = expenses.reduce((acc, curr) => acc + (curr.amount || 0), 0);
     const totalCost = (manifest.total_landing_cost || 0) + aggregateExpenses;
 
-    // 2. Generate Production Matrix from database
     const production = manifest.production_items || [];
     
-    // 3. Compute Live Stock Status Framework
     const stockMatrix = production.map(item => {
       let totalBalesSold = 0;
       sales.forEach(sale => {
@@ -159,16 +207,21 @@ router.get('/reconciliation/:id', async (req, res) => {
   }
 });
 
-// PUT: Direct Production Update Interface Core Override
-// Matches: PUT /api/consignments/:id/production
+// PUT: Direct Production Update Interface Core Override & Sync Catalog
 router.put('/:id/production', async (req, res) => {
   try {
     const { production_items } = req.body;
-    const updated = await Consignment.findByIdAndUpdate(
-      req.params.id,
-      { $set: { production_items: production_items } },
-      { new: true }
-    );
+    const consignmentId = req.params.id;
+
+    const consignment = await Consignment.findById(consignmentId);
+    if (!consignment) return res.status(404).json({ message: 'Consignment not found.' });
+
+    consignment.production_items = production_items;
+    const updated = await consignment.save();
+
+    // 🔄 Sync updated production items to Product Catalog
+    await syncProductionToProducts(production_items, consignment.consignment_ref);
+
     res.json({ message: 'Production matrix layers aligned successfully.', updated });
   } catch (err) {
     res.status(400).json({ message: err.message });
@@ -176,7 +229,6 @@ router.put('/:id/production', async (req, res) => {
 });
 
 // POST: Log Customer Multi-Item Invoice Entry
-// Matches: POST /api/consignments/:id/invoice
 router.post('/:id/invoice', async (req, res) => {
   try {
     const cId = new mongoose.Types.ObjectId(req.params.id);
@@ -184,8 +236,8 @@ router.post('/:id/invoice', async (req, res) => {
       consignmentId: cId,
       customerName: req.body.customerName || 'Cash Customer',
       date: req.body.date || new Date(),
-      items: req.body.items || [], // Array containing: { itemCode, actualSize, qty, sellingPrice }
-      paymentStatus: req.body.paymentStatus || 'Paid', // Paid, Debt, Partial
+      items: req.body.items || [], 
+      paymentStatus: req.body.paymentStatus || 'Paid', 
       amountPaid: Number(req.body.amountPaid) || 0
     });
     await newInvoice.save();
@@ -196,7 +248,6 @@ router.post('/:id/invoice', async (req, res) => {
 });
 
 // POST: Record Standalone Loose Byproduct Sales Output
-// Matches: POST /api/consignments/:id/byproduct-sale
 router.post('/:id/byproduct-sale', async (req, res) => {
   try {
     const cId = new mongoose.Types.ObjectId(req.params.id);
@@ -216,7 +267,6 @@ router.post('/:id/byproduct-sale', async (req, res) => {
 });
 
 // POST: Add Operational Expense Manifest Layout Line
-// Matches: POST /api/consignments/:id/expense
 router.post('/:id/expense', async (req, res) => {
   try {
     const cId = new mongoose.Types.ObjectId(req.params.id);
@@ -235,7 +285,6 @@ router.post('/:id/expense', async (req, res) => {
 });
 
 // PUT: Debt Repayment Balance Ledger Update Router
-// Matches: PUT /api/consignments/:id/invoice/:invoiceId/repay
 router.put('/:id/invoice/:invoiceId/repay', async (req, res) => {
   try {
     const target = await Sale.findById(req.params.invoiceId);
@@ -244,8 +293,6 @@ router.put('/:id/invoice/:invoiceId/repay', async (req, res) => {
     const newDeposit = Number(req.body.depositAmount) || 0;
     target.amountPaid = (target.amountPaid || 0) + newDeposit;
     
-    // If outstanding balance is covered, update the status automatically
-    // items calculations can be done or manually tracked depending on UI implementation
     await target.save();
     res.json({ message: 'Financial repayment ledger cleared.', target });
   } catch (err) {

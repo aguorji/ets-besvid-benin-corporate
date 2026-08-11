@@ -1,8 +1,10 @@
+// src/pages/Dashboard.jsx
 import React, { useState } from 'react';
 import { Plus, Package, Globe, LogOut } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ConsignmentCommandCenter from './ConsignmentCommandCenter';
 import { useConsignmentData } from '../components/useConsignmentData';
+import GeneralStockModal from '../components/GeneralStockModal'; // 👈 Import General Stock modal component
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -17,6 +19,8 @@ export default function Dashboard() {
 
   const [activeWorkspace, setActiveWorkspace] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isGeneralStockOpen, setIsGeneralStockOpen] = useState(false); // 👈 State for General Stock Modal popup
+
   const [formData, setFormData] = useState({
     consignmentRef: '',
     type: 'Giant Bales',
@@ -26,6 +30,7 @@ export default function Dashboard() {
     totalGrossMassWeight: ''
   });
 
+  // Handle creating a new manifest entry from intake registration modal
   const handleCreateManifest = (e) => {
     e.preventDefault();
     const newManifest = {
@@ -52,11 +57,13 @@ export default function Dashboard() {
     });
   };
 
+  // Handle user session logout
   const handleLogout = () => {
     localStorage.removeItem('userInfo');
     navigate('/login');
   };
 
+  // Render active consignment command workspace if selected
   if (activeWorkspace) {
     return (
       <ConsignmentCommandCenter 
@@ -69,6 +76,7 @@ export default function Dashboard() {
     );
   }
 
+  // Helper function to determine unit labels based on category type
   const getUnitLabel = (type) => {
     if (type === 'Shoes' || type === 'Bags') return 'Sacks';
     return 'Bales';
@@ -86,6 +94,7 @@ export default function Dashboard() {
           </div>
           
           <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end flex-wrap">
+            
             {/* Currency Symbol Selection Dropdown */}
             <div className="flex items-center bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 gap-2">
               <Globe className="w-4 h-4 text-amber-500" />
@@ -100,10 +109,18 @@ export default function Dashboard() {
               </select>
             </div>
 
+            {/* General Stock Inventory Summary Button */}
+            <button 
+              onClick={() => setIsGeneralStockOpen(true)}
+              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-750 text-amber-400 border border-slate-700 text-xs px-3.5 py-2 rounded-xl transition font-bold cursor-pointer shadow-md"
+            >
+              <Package className="w-4 h-4" /> General Stock
+            </button>
+
             {/* New Intake Button */}
             <button 
               onClick={() => setIsModalOpen(true)}
-              className="bg-amber-500 text-slate-950 font-semibold px-4 py-2 rounded-xl text-sm flex items-center gap-2 hover:bg-amber-400 shadow-md transition"
+              className="bg-amber-500 text-slate-950 font-semibold px-4 py-2 rounded-xl text-sm flex items-center gap-2 hover:bg-amber-400 shadow-md transition cursor-pointer"
             >
               <Plus className="w-4 h-4" /> New Intake Registration
             </button>
@@ -111,14 +128,14 @@ export default function Dashboard() {
             {/* Permanent Session Logout Button */}
             <button 
               onClick={handleLogout} 
-              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-750 text-rose-400 border border-slate-700 hover:border-rose-500/40 text-xs px-3.5 py-2 rounded-xl transition font-semibold"
+              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-750 text-rose-400 border border-slate-700 hover:border-rose-500/40 text-xs px-3.5 py-2 rounded-xl transition font-semibold cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" /> Log Out
             </button>
           </div>
         </div>
 
-        {/* Consignment Table */}
+        {/* Consignment Table Registry */}
         <div className="bg-slate-800/40 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm border-collapse">
@@ -157,7 +174,7 @@ export default function Dashboard() {
                     <td className="py-4 px-4 text-right">
                       <button 
                         onClick={() => setActiveWorkspace(row)}
-                        className="bg-slate-800 hover:bg-slate-750 text-amber-500 hover:text-amber-400 font-bold text-xs border border-slate-700 rounded-lg px-3 py-1.5 transition"
+                        className="bg-slate-800 hover:bg-slate-750 text-amber-500 hover:text-amber-400 font-bold text-xs border border-slate-700 rounded-lg px-3 py-1.5 transition cursor-pointer"
                       >
                         Open Dashboard
                       </button>
@@ -169,7 +186,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Modal Window */}
+        {/* New Intake Modal Window */}
         {isModalOpen && (
           <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
@@ -184,7 +201,7 @@ export default function Dashboard() {
                   <select 
                     value={formData.type} 
                     onChange={e => setFormData({...formData, type: e.target.value})}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 cursor-pointer"
                   >
                     <option value="Giant Bales">Giant Bales</option>
                     <option value="Direct Bales">Direct Bales</option>
@@ -216,13 +233,22 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex justify-end gap-2 pt-4 border-t border-slate-800 mt-4">
-                  <button type="button" onClick={() => setIsModalOpen(false)} className="bg-slate-800 text-slate-300 font-semibold px-4 py-2 rounded-xl text-xs hover:bg-slate-750 transition">Cancel</button>
-                  <button type="submit" className="bg-amber-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs hover:bg-amber-400 transition">Commit Data Profile</button>
+                  <button type="button" onClick={() => setIsModalOpen(false)} className="bg-slate-800 text-slate-300 font-semibold px-4 py-2 rounded-xl text-xs hover:bg-slate-750 transition cursor-pointer">Cancel</button>
+                  <button type="submit" className="bg-amber-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs hover:bg-amber-400 transition cursor-pointer">Commit Data Profile</button>
                 </div>
               </form>
             </div>
           </div>
         )}
+
+        {/* General Stock Inventory Modal Component */}
+        <GeneralStockModal 
+          isOpen={isGeneralStockOpen} 
+          onClose={() => setIsGeneralStockOpen(false)} 
+          consignments={consignments}
+          getWorkspaceData={getWorkspaceData}
+          currency={currency}
+        />
 
       </div>
     </div>

@@ -4,17 +4,17 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 export default function ProtectedRoute() {
-  const { isAuthenticated, loading } = useAuth();
+  const { user, loading } = useAuth();
 
-  // Prevent flash redirection while the session token verification pipeline resolves
+  // 1. Wait until AuthContext finishes initializing from LocalStorage
   if (loading) {
     return (
-      <div className="p-6 font-mono text-xs text-gray-400 animate-pulse bg-off-white min-h-screen flex items-center justify-center">
-        Verifying secure terminal clearance...
+      <div className="min-h-screen bg-slate-900 text-slate-400 flex justify-center items-center font-mono text-xs">
+        Verifying Security Credentials...
       </div>
     );
   }
 
-  // Enforce secure boundaries: stream child components or bounce to login portal
-  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />;
+  // 2. If authenticated, render protected child routes; otherwise redirect to /login
+  return user ? <Outlet /> : <Navigate to="/login" replace />;
 }

@@ -1,3 +1,4 @@
+// backend/controllers/productController.js
 import ProductItem from '../models/ProductItem.js';
 
 // @desc    Register a completely new root product type (e.g., LMD, MCSH)
@@ -6,13 +7,17 @@ export const createProduct = async (req, res) => {
   try {
     const { itemCode, description, unit, standardSize } = req.body;
 
-    const duplicateCheck = await ProductItem.findOne({ itemCode: itemCode.toUpperCase() });
+    if (!itemCode) {
+      return res.status(400).json({ message: 'Item code is required.' });
+    }
+
+    const duplicateCheck = await ProductItem.findOne({ itemCode: itemCode.toUpperCase().trim() });
     if (duplicateCheck) {
       return res.status(400).json({ message: `Product item code '${itemCode.toUpperCase()}' already exists.` });
     }
 
     const newProduct = await ProductItem.create({
-      itemCode,
+      itemCode: itemCode.toUpperCase().trim(),
       description,
       unit,
       standardSize,
@@ -25,13 +30,14 @@ export const createProduct = async (req, res) => {
   }
 };
 
-// @desc    Fetch all available root products for selection drops
+// @desc    Fetch all available root products along with their embedded stock variations
 // @route   GET /api/products
 export const getProducts = async (req, res) => {
   try {
     // Dynamically flushes mismatched background indexes to accept empty arrays smoothly
     await ProductItem.cleanIndexes().catch(() => {});
     
+    // Embedded stock_variations are fetched automatically by Mongoose
     const products = await ProductItem.find({}).sort({ itemCode: 1 });
     res.status(200).json(products);
   } catch (error) {
@@ -44,19 +50,29 @@ export const getProducts = async (req, res) => {
 export const addStockVariation = async (req, res) => {
   try {
     const { id } = req.params;
-    const { production_ref, consignment_id, actual_size, size_type, quantity_produced, base_price, adj_price } = req.body;
+    const { 
+      production_ref, 
+      consignment_id, 
+      actual_size, 
+      size_type, 
+      quantity_produced, 
+      base_price, 
+      adj_price 
+    } = req.body;
 
     const product = await ProductItem.findById(id);
     if (!product) {
       return res.status(404).json({ message: 'Target product not found' });
     }
 
+    // Push new batch into the embedded stock_variations array
     product.stock_variations.push({
       production_ref,
       consignment_id,
       actual_size,
       size_type,
       quantity_produced,
+      quantity_balance: quantity_produced, // Ensure balance initializes to produced quantity
       base_price,
       adj_price
     });

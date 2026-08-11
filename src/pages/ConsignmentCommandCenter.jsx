@@ -1,16 +1,23 @@
+// src/components/ConsignmentCommandCenter.jsx
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   FileText, TrendingUp, ShoppingBag, Layers, 
-  DollarSign, BarChart2, Users, Wallet, Plus, Trash2, ArrowLeft, Upload 
+  DollarSign, BarChart2, Users, Wallet, Plus, Trash2, ArrowLeft, Upload, AlertCircle, CheckCircle2 
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
-export default function ConsignmentCommandCenter({ consignment, currency, initialData, onSaveData, onBack }) {
+/**
+ * ConsignmentCommandCenter Component
+ * Manages the detailed operational workspace for an individual consignment shipment.
+ * Handles production tracking, pricelist valuations, sales invoices with multi-consignment cross-stock checks,
+ * immediate or partial bale/sack supply inputs, byproduct sales, expenses, and fulfillment status.
+ */
+export default function ConsignmentCommandCenter({ consignment, currency, initialData, onSaveData, onBack, allConsignmentsData, onCrossConsignmentStockUpdate }) {
   const isDirectCargo = consignment?.type !== 'Giant Bales';
   const unitLabel = (consignment?.type === 'Shoes' || consignment?.type === 'Bags') ? 'Sack' : 'Bale';
   const [activeTab, setActiveTab] = useState(isDirectCargo ? 'pricelist' : 'production');
 
-  // Load from Initial Persistent Stack
+  // Initialize operational workspace state variables from persistent storage
   const [productionList, setProductionList] = useState(initialData.productionList || []);
   const [pricelist, setPricelist] = useState(initialData.pricelist || []);
   const [salesLog, setSalesLog] = useState(initialData.salesLog || []);
@@ -21,27 +28,34 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     item: '', unit: 'KGS per Bale', stdSize: '55KG', qty: '', actualSize: '55KG' 
   });
 
-  // Sync shifts directly upward into memory arrays
+  // Automatically save workspace state changes upstream whenever core ledgers update
   useEffect(() => {
     onSaveData({ productionList, pricelist, salesLog, byproductSales, expenses });
   }, [productionList, pricelist, salesLog, byproductSales, expenses]);
 
+  // Sales Invoice creation form states
   const [invoiceCustomer, setInvoiceCustomer] = useState('');
-  const [invoicePaymentType, setInvoicePaymentType] = useState('Cash');
+  const [invoicePaymentType, setInvoicePaymentType] = useState('Cash'); 
   const [invoiceAmountPaid, setInvoiceAmountPaid] = useState('');
+  
+  // Sales Invoice Item Line rows with explicit initial supplied quantity input field
   const [invoiceItems, setInvoiceItems] = useState([
-    { itemCode: '', actualSize: '', qty: '', sellingPrice: '', delivered: '' }
+    { itemCode: '', actualSize: '', qty: '', sellingPrice: '', delivered: '', sourceConsignmentRef: '' }
   ]);
+  
+  // Alert notification state for out-of-stock items during invoice processing
+  const [stockAlert, setStockAlert] = useState(null);
 
   const [byproductForm, setByproductForm] = useState({ date: '', type: 'Loose Fiber', subType: 'Grade A', qty: '', price: '' });
   const [expenseForm, setExpenseForm] = useState({ date: '', category: '', description: '', amount: '' });
 
+  // Helper function to toggle packaging default standards
   const handleUnitToggle = (selectedUnit) => {
     const defaultSize = selectedUnit === 'KGS per Bale' ? '55KG' : '250 PCS';
     setProdForm({ ...prodForm, unit: selectedUnit, stdSize: defaultSize, actualSize: defaultSize });
   };
 
-  // Helper Engine shared between Manual Inputs & Excel Upload Parsers
+  // Helper engine to process production records (used by manual forms and Excel upload parsers)
   const processProductionEntry = (itemName, unit, stdSize, qtyNum, actualSize, currentProdList, currentPriceList) => {
     const newItemId = Date.now().toString() + Math.random().toString(36).substr(2, 5);
     const numericStd = parseFloat(stdSize) || 1;
@@ -81,6 +95,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     }
   };
 
+  // Handle manual addition of a production entry
   const handleAddProduction = (e) => {
     e.preventDefault();
     if (!prodForm.item || !prodForm.qty) return;
@@ -109,6 +124,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     setProdForm({ item: '', unit: 'KGS per Bale', stdSize: '55KG', qty: '', actualSize: '55KG' });
   };
 
+  // Handle uploading and parsing Excel manifest packing lists
   const handleExcelUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -160,6 +176,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     reader.readAsBinaryString(file);
   };
 
+  // Handle inline edits within the production ledger
   const handleInlineProductionEdit = (id, field, value) => {
     setProductionList(prevProd => {
       const updatedProd = prevProd.map(p => {
@@ -177,6 +194,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     });
   };
 
+  // Handle removing a production row
   const handleDeleteProductionRow = (id) => {
     if (window.confirm("Are you sure you want to remove this entry from the production list?")) {
       const updatedProd = productionList.filter(p => p.id !== id);
@@ -185,6 +203,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     }
   };
 
+  // Rebuild the pricelist matrix whenever production entries change
   const rebuildPricelistFromProduction = (currentProdList) => {
     setPricelist(prevPrice => {
       const workingPriceMap = {};
@@ -220,59 +239,240 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     });
   };
 
+  // Handle editing item standard prices in the pricelist matrix
   const handlePricelistChange = (id, field, value) => {
     setPricelist(prev => prev.map(item => item.id === id ? { ...item, [field]: Number(value) } : item));
   };
 
-  // Dynamic Dropdown Stock Profile Mapper
+  // Compile available stock profiles across ALL consignments for dropdown and manual entry mapping
   const availableStockProfiles = useMemo(() => {
     const profiles = [];
-    pricelist.forEach(p => {
-      if (p.qty > 0) {
-        profiles.push({
-          itemCode: p.item,
-          displayName: `${p.item} (Std Base: ${p.stdSize})`,
-          actualSize: p.stdSize,
-          isVariance: false
-        });
-      }
-      if (p.varianceBales && p.varianceBales.length > 0) {
-        p.varianceBales.forEach(v => {
+    
+    const extractProfiles = (pList, sLog, refName) => {
+      if (!pList) return;
+      pList.forEach(p => {
+        const totalStdSold = sLog ? sLog.reduce((sum, inv) => {
+          const matches = inv.items ? inv.items.filter(i => i.itemCode && i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === p.stdSize) : [];
+          return sum + matches.reduce((acc, curr) => acc + (curr.qty || 0), 0);
+        }, 0) : 0;
+        const baseBalance = (p.qty || 0) - totalStdSold;
+
+        if (baseBalance > 0) {
           profiles.push({
             itemCode: p.item,
-            displayName: `${p.item} (Variance Weight: ${v.actualSize})`,
-            actualSize: v.actualSize,
-            isVariance: true
+            displayName: `${p.item} (${p.stdSize}) [Ref: ${refName}] - Bal: ${baseBalance}`,
+            actualSize: p.stdSize,
+            isVariance: false,
+            availableQty: baseBalance,
+            sourceConsignmentRef: refName
           });
+        }
+
+        if (p.varianceBales && p.varianceBales.length > 0) {
+          p.varianceBales.forEach(v => {
+            const totalVarSold = sLog ? sLog.reduce((sum, inv) => {
+              const matches = inv.items ? inv.items.filter(i => i.itemCode && i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === v.actualSize) : [];
+              return sum + matches.reduce((acc, curr) => acc + (curr.qty || 0), 0);
+            }, 0) : 0;
+            const varBal = (v.qty || 0) - totalVarSold;
+            if (varBal > 0) {
+              profiles.push({
+                itemCode: p.item,
+                displayName: `${p.item} (${v.actualSize}) [Ref: ${refName}] - Bal: ${varBal}`,
+                actualSize: v.actualSize,
+                isVariance: true,
+                availableQty: varBal,
+                sourceConsignmentRef: refName
+              });
+            }
+          });
+        }
+      });
+    };
+
+    // 1. Current Consignment Stock
+    extractProfiles(pricelist, salesLog, consignment?.consignmentRef);
+
+    // 2. All Other Consignments Stock
+    if (allConsignmentsData && allConsignmentsData.length > 0) {
+      allConsignmentsData.forEach(otherC => {
+        if (otherC.id === consignment?.id) return;
+        extractProfiles(otherC.pricelist || [], otherC.salesLog || [], otherC.consignmentRef);
+      });
+    }
+
+    return profiles;
+  }, [pricelist, salesLog, consignment, allConsignmentsData]);
+
+  // Compute pricing valuations for pricelist items
+  const calculatedPricelistItems = useMemo(() => {
+    return pricelist.map(p => {
+      const stdWt = parseFloat(p.stdSize) || 1;
+      let extraValue = 0;
+      let extraBaleCountDisplay = [];
+
+      if (p.varianceBales && p.varianceBales.length > 0) {
+        p.varianceBales.forEach(v => {
+          const actWt = parseFloat(v.actualSize) || 0;
+          const proportionalFactor = actWt / stdWt;
+          extraValue += v.qty * proportionalFactor * p.stdPrice;
+          extraBaleCountDisplay.push(`${v.qty} (${v.actualSize})`);
         });
       }
+
+      const standardStockValue = p.qty * p.stdPrice;
+      const totalStockVal = standardStockValue + extraValue;
+
+      return {
+        ...p,
+        totalStockVal,
+        extraDisplay: extraBaleCountDisplay.join(', ') || 'None'
+      };
     });
-    return profiles;
   }, [pricelist]);
 
+  // Automated live stock balance ledger calculations
+  const liveStockLedger = useMemo(() => {
+    return calculatedPricelistItems.map(p => {
+      const totalStdSold = salesLog.reduce((sum, inv) => {
+        const matches = inv.items.filter(i => i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === p.stdSize);
+        return sum + matches.reduce((acc, curr) => acc + curr.qty, 0);
+      }, 0);
+
+      const baseBalance = p.qty - totalStdSold;
+      const stdWt = parseFloat(p.stdSize) || 1;
+      let varianceValueRemaining = 0;
+      let activeVarianceStrings = [];
+      let totalRemainingVarianceBalesCount = 0;
+
+      if (p.varianceBales && p.varianceBales.length > 0) {
+        p.varianceBales.forEach(v => {
+          const totalVarSold = salesLog.reduce((sum, inv) => {
+            const matches = inv.items.filter(i => i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === v.actualSize);
+            return sum + matches.reduce((acc, curr) => acc + curr.qty, 0);
+          }, 0);
+
+          const varBal = v.qty - totalVarSold;
+          if (varBal > 0) {
+            const actWt = parseFloat(v.actualSize) || 0;
+            varianceValueRemaining += varBal * (actWt / stdWt) * p.stdPrice;
+            activeVarianceStrings.push(`${varBal} (${v.actualSize})`);
+            totalRemainingVarianceBalesCount += varBal;
+          }
+        });
+      }
+
+      const stockValue = (baseBalance * p.stdPrice) + varianceValueRemaining;
+      const cumulativePhysicalBalance = baseBalance + totalRemainingVarianceBalesCount;
+
+      return {
+        item: p.item,
+        actualSize: p.stdSize,
+        qty: p.qty,
+        varianceInfo: activeVarianceStrings.join(', ') || 'None',
+        sold: totalStdSold,
+        balance: cumulativePhysicalBalance,
+        stdPrice: p.stdPrice,
+        stockValue
+      };
+    });
+  }, [calculatedPricelistItems, salesLog]);
+
+  // Handle invoice item changes with multi-size and cross-consignment awareness
   const handleInvoiceItemChange = (index, field, value) => {
     const updated = [...invoiceItems];
     updated[index][field] = (field === 'qty' || field === 'sellingPrice' || field === 'delivered') ? Number(value) : value;
     
-    if (field === 'itemCode') {
-      const selectedProfile = availableStockProfiles.find(p => p.displayName === value);
+    if (field === 'itemCode' || field === 'selectedProfileKey') {
+      const selectedProfile = availableStockProfiles.find(p => p.displayName === value || p.itemCode === value || `${p.itemCode} (${p.actualSize})` === value);
       if (selectedProfile) {
         updated[index].itemCode = selectedProfile.itemCode;
         updated[index].actualSize = selectedProfile.actualSize;
         updated[index].isVariance = selectedProfile.isVariance;
-        updated[index].selectedProfileKey = value;
+        updated[index].selectedProfileKey = selectedProfile.displayName;
+        updated[index].sourceConsignmentRef = selectedProfile.sourceConsignmentRef || consignment.consignmentRef;
+      } else {
+        const matchingProfiles = availableStockProfiles.filter(p => p.itemCode.toLowerCase() === value.toLowerCase());
+        if (matchingProfiles.length === 1) {
+          updated[index].itemCode = matchingProfiles[0].itemCode;
+          updated[index].actualSize = matchingProfiles[0].actualSize;
+          updated[index].sourceConsignmentRef = matchingProfiles[0].sourceConsignmentRef || consignment.consignmentRef;
+        } else {
+          updated[index].itemCode = value.toUpperCase();
+          if (!updated[index].sourceConsignmentRef) {
+            updated[index].sourceConsignmentRef = consignment.consignmentRef;
+          }
+        }
       }
     }
     setInvoiceItems(updated);
+    setStockAlert(null);
+  };
+
+  // Cross-Consignment Stock Inspection Engine
+  // Checks current consignment stock first; if unavailable, inspects other registered consignments.
+  const checkAndResolveStockAvailability = (itemCode, requestedQty, size) => {
+    const currentStockItem = liveStockLedger.find(s => s.item.toLowerCase() === itemCode.toLowerCase() && s.actualSize === size);
+    if (currentStockItem && currentStockItem.balance >= requestedQty) {
+      return { found: true, sourceRef: consignment.consignmentRef, deductionType: 'current' };
+    }
+
+    if (allConsignmentsData && allConsignmentsData.length > 0) {
+      for (const otherConsignment of allConsignmentsData) {
+        if (otherConsignment.id === consignment.id) continue;
+        
+        const otherWorkspace = allConsignmentsData.find(c => c.id === otherConsignment.id);
+        const otherPricelist = otherWorkspace?.pricelist || [];
+        const otherSalesLog = otherWorkspace?.salesLog || [];
+        
+        const foundMatch = otherPricelist.find(p => p.item.toLowerCase() === itemCode.toLowerCase());
+        if (foundMatch) {
+          const otherSold = otherSalesLog.reduce((sum, inv) => {
+            const matches = inv.items.filter(i => i.itemCode.toLowerCase() === itemCode.toLowerCase());
+            return sum + matches.reduce((acc, curr) => acc + curr.qty, 0);
+          }, 0);
+          const otherBalance = foundMatch.qty - otherSold;
+
+          if (otherBalance >= requestedQty) {
+            return { found: true, sourceRef: otherConsignment.consignmentRef, consignmentId: otherConsignment.id, deductionType: 'cross' };
+          }
+        }
+      }
+    }
+
+    return { found: false };
   };
 
   const removeInvoiceRow = (index) => {
     setInvoiceItems(invoiceItems.filter((_, i) => i !== index));
   };
 
+  // Submit commercial invoice and run stock validation checks across consignments
   const handleCreateInvoice = (e) => {
     e.preventDefault();
     if (!invoiceCustomer || invoiceItems.some(i => !i.itemCode || !i.qty)) return;
+
+    for (const item of invoiceItems) {
+      const reqQty = Number(item.qty);
+      const stockCheck = checkAndResolveStockAvailability(item.itemCode, reqQty, item.actualSize);
+
+      if (!stockCheck.found) {
+        setStockAlert(`⚠️ Alert: Item "${item.itemCode}" (${item.actualSize}) is NOT in stock in this consignment or any other available consignment!`);
+        return;
+      }
+
+      if (stockCheck.deductionType === 'cross') {
+        if (onCrossConsignmentStockUpdate) {
+          onCrossConsignmentStockUpdate(stockCheck.consignmentId, item.itemCode, item.actualSize, reqQty);
+        }
+        item.sourceConsignmentRef = stockCheck.sourceRef;
+      } else {
+        item.sourceConsignmentRef = consignment.consignmentRef;
+      }
+      
+      // Ensure supplied/delivered quantity defaults to 0 if left blank
+      item.delivered = item.delivered !== '' && !isNaN(item.delivered) ? Number(item.delivered) : 0;
+    }
 
     const totalInvoiceValue = invoiceItems.reduce((sum, item) => sum + (item.qty * item.sellingPrice), 0);
     const amountPaidVal = Number(invoiceAmountPaid || 0);
@@ -301,10 +501,11 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     };
 
     setSalesLog([...salesLog, newInvoice]);
+    setStockAlert(null);
     setInvoiceCustomer('');
     setInvoicePaymentType('Cash');
     setInvoiceAmountPaid('');
-    setInvoiceItems([{ itemCode: '', actualSize: '', qty: '', sellingPrice: '', delivered: '', selectedProfileKey: '' }]);
+    setInvoiceItems([{ itemCode: '', actualSize: '', qty: '', sellingPrice: '', delivered: '', selectedProfileKey: '', sourceConsignmentRef: '' }]);
   };
 
   const handleAddByproduct = (e) => {
@@ -337,11 +538,15 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     setExpenseForm({ date: '', category: '', description: '', amount: '' });
   };
 
+  // Flatten sales log items into detailed rows, calculating pending vs delivered fulfillment status
   const detailedSalesRows = useMemo(() => {
     const entries = [];
     salesLog.forEach(inv => {
       const itemWeightFactor = inv.total > 0 ? inv.amountPaid / inv.total : 0;
       inv.items.forEach(item => {
+        const deliveredQty = item.delivered || 0;
+        const pendingQty = Math.max(0, item.qty - deliveredQty);
+        
         entries.push({
           date: inv.date,
           customer: inv.customer,
@@ -351,95 +556,16 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
           qty: item.qty,
           sellingPrice: item.sellingPrice,
           revenue: item.revenue,
-          variance: item.variance,
-          performance: item.performance,
           amountPaid: item.revenue * itemWeightFactor,
           balance: item.revenue - (item.revenue * itemWeightFactor),
-          delivered: item.delivered || 0,
-          pending: Math.max(0, item.qty - (item.delivered || 0))
+          sourceRef: item.sourceConsignmentRef || consignment.consignmentRef,
+          delivered: deliveredQty,
+          pending: pendingQty
         });
       });
     });
     return entries;
-  }, [salesLog]);
-
-  // Pricing based strictly on a single baseline standard price
-  const calculatedPricelistItems = useMemo(() => {
-    return pricelist.map(p => {
-      const stdWt = parseFloat(p.stdSize) || 1;
-      let extraValue = 0;
-      let extraBaleCountDisplay = [];
-
-      if (p.varianceBales && p.varianceBales.length > 0) {
-        p.varianceBales.forEach(v => {
-          const actWt = parseFloat(v.actualSize) || 0;
-          const proportionalFactor = actWt / stdWt;
-          // Drive math completely off base p.stdPrice
-          extraValue += v.qty * proportionalFactor * p.stdPrice;
-          extraBaleCountDisplay.push(`${v.qty} (${v.actualSize})`);
-        });
-      }
-
-      const standardStockValue = p.qty * p.stdPrice;
-      const totalStockVal = standardStockValue + extraValue;
-
-      return {
-        ...p,
-        totalStockVal,
-        extraDisplay: extraBaleCountDisplay.join(', ') || 'None'
-      };
-    });
-  }, [pricelist]);
-
-  const liveStockLedger = useMemo(() => {
-    return calculatedPricelistItems.map(p => {
-      // Standard sold
-      const totalStdSold = salesLog.reduce((sum, inv) => {
-        const matches = inv.items.filter(i => i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === p.stdSize);
-        return sum + matches.reduce((acc, curr) => acc + curr.qty, 0);
-      }, 0);
-
-      const baseBalance = p.qty - totalStdSold;
-      const stdWt = parseFloat(p.stdSize) || 1;
-      let varianceValueRemaining = 0;
-      let activeVarianceStrings = [];
-      let totalRemainingVarianceBalesCount = 0;
-
-      if (p.varianceBales && p.varianceBales.length > 0) {
-        p.varianceBales.forEach(v => {
-          const totalVarSold = salesLog.reduce((sum, inv) => {
-            const matches = inv.items.filter(i => i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === v.actualSize);
-            return sum + matches.reduce((acc, curr) => acc + curr.qty, 0);
-          }, 0);
-
-          const varBal = v.qty - totalVarSold;
-          if (varBal > 0) {
-            const actWt = parseFloat(v.actualSize) || 0;
-            // Value math using standard price base
-            varianceValueRemaining += varBal * (actWt / stdWt) * p.stdPrice;
-            activeVarianceStrings.push(`${varBal} (${v.actualSize})`);
-            totalRemainingVarianceBalesCount += varBal;
-          }
-        });
-      }
-
-      const stockValue = (baseBalance * p.stdPrice) + varianceValueRemaining;
-      
-      // FIXED: Cumulative inventory count (Standard Base remaining + Variance remaining)
-      const cumulativePhysicalBalance = baseBalance + totalRemainingVarianceBalesCount;
-
-      return {
-        item: p.item,
-        actualSize: p.stdSize,
-        qty: p.qty,
-        varianceInfo: activeVarianceStrings.join(', ') || 'None',
-        sold: totalStdSold,
-        balance: cumulativePhysicalBalance, // Now displays the absolute tally correctly!
-        stdPrice: p.stdPrice,
-        stockValue
-      };
-    });
-  }, [calculatedPricelistItems, salesLog]);
+  }, [salesLog, consignment]);
 
   const grandTotalStockAssetValue = useMemo(() => {
     return liveStockLedger.reduce((sum, item) => sum + item.stockValue, 0);
@@ -491,7 +617,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     <div className="bg-slate-900 text-slate-100 min-h-screen p-6 font-sans">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-800 pb-5 mb-6 gap-4">
         <div>
-          <button onClick={onBack} className="flex items-center text-sm text-amber-500 hover:text-amber-400 mb-2 transition">
+          <button onClick={onBack} className="flex items-center text-sm text-amber-500 hover:text-amber-400 mb-2 transition cursor-pointer">
             <ArrowLeft className="w-4 h-4 mr-1" /> Back to Workspace Grid
           </button>
           <h1 className="text-2xl font-bold tracking-tight text-white">
@@ -527,7 +653,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition text-left ${
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sm transition text-left cursor-pointer ${
                   activeTab === tab.id ? 'bg-amber-500 text-slate-950 shadow-lg' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
                 }`}
               >
@@ -553,7 +679,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                 </div>
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Unit</label>
-                  <select value={prodForm.unit} onChange={e => handleUnitToggle(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                  <select value={prodForm.unit} onChange={e => handleUnitToggle(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white cursor-pointer">
                     <option value="KGS per Bale">KGS per Bale</option>
                     <option value="PCS per Bale">PCS per Bale</option>
                   </select>
@@ -571,7 +697,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                   <input type="text" value={prodForm.actualSize} onChange={e => setProdForm({...prodForm, actualSize: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
                 </div>
                 <div className="col-span-1 md:col-span-5 flex justify-end pt-2">
-                  <button type="submit" className="bg-amber-500 text-slate-900 font-bold text-xs rounded-xl px-5 py-2.5 hover:bg-amber-400 transition flex items-center gap-1">
+                  <button type="submit" className="bg-amber-500 text-slate-900 font-bold text-xs rounded-xl px-5 py-2.5 hover:bg-amber-400 transition flex items-center gap-1 cursor-pointer">
                     <Plus className="w-4 h-4" /> Add Item Record
                   </button>
                 </div>
@@ -600,7 +726,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                             <input type="text" value={p.item} onChange={(e) => handleInlineProductionEdit(p.id, 'item', e.target.value.toUpperCase())} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-2 py-1 text-sm text-white font-bold w-28 focus:outline-none" />
                           </td>
                           <td className="py-2 px-1 text-xs">
-                            <select value={p.unit} onChange={(e) => handleInlineProductionEdit(p.id, 'unit', e.target.value)} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-1 py-1 text-slate-300 focus:outline-none">
+                            <select value={p.unit} onChange={(e) => handleInlineProductionEdit(p.id, 'unit', e.target.value)} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-1 py-1 text-slate-300 focus:outline-none cursor-pointer">
                               <option value="KGS per Bale">KGS per Bale</option>
                               <option value="PCS per Bale">PCS per Bale</option>
                             </select>
@@ -620,7 +746,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                             </span>
                           </td>
                           <td className="py-2 px-2 text-center">
-                            <button type="button" onClick={() => handleDeleteProductionRow(p.id)} className="text-slate-500 hover:text-rose-400 p-1 transition"><Trash2 className="w-4 h-4" /></button>
+                            <button type="button" onClick={() => handleDeleteProductionRow(p.id)} className="text-slate-500 hover:text-rose-400 p-1 transition cursor-pointer"><Trash2 className="w-4 h-4" /></button>
                           </td>
                         </tr>
                       ))
@@ -672,6 +798,15 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
           {activeTab === 'sales' && (
             <div className="space-y-8">
               <h2 className="text-xl font-semibold text-white">Commercial Invoice Registry</h2>
+              
+              {/* Out of Stock Warning Alert Banner */}
+              {stockAlert && (
+                <div className="bg-rose-500/10 border border-rose-500/40 text-rose-400 px-4 py-3 rounded-xl text-xs flex items-center gap-2 shadow-lg">
+                  <AlertCircle className="w-5 h-5 shrink-0" />
+                  <span className="font-semibold">{stockAlert}</span>
+                </div>
+              )}
+
               <form onSubmit={handleCreateInvoice} className="bg-slate-800/50 p-5 rounded-xl border border-slate-700/50 space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
@@ -680,7 +815,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                   </div>
                   <div>
                     <label className="block text-xs text-slate-400 mb-1">Payment Type Method</label>
-                    <select value={invoicePaymentType} onChange={e => setInvoicePaymentType(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full focus:outline-none">
+                    <select value={invoicePaymentType} onChange={e => setInvoicePaymentType(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full focus:outline-none cursor-pointer">
                       <option value="Cash">Cash / Immediate</option>
                       <option value="Bank Transfer">Bank Wire Transfer</option>
                       <option value="Credit Terms">Deferred Credit Account</option>
@@ -693,35 +828,79 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                 </div>
 
                 <div className="space-y-2">
-                  <label className="block text-xs text-slate-400 font-medium">Manifest Line Items Allocation</label>
+                  <label className="block text-xs text-slate-400 font-medium">Manifest Line Items Allocation & Supply Input</label>
                   {invoiceItems.map((line, idx) => (
-                    <div key={idx} className="flex flex-wrap items-center gap-2 bg-slate-900/60 p-2 rounded-lg border border-slate-800">
-                      <select value={line.selectedProfileKey || ''} onChange={e => handleInvoiceItemChange(idx, 'itemCode', e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white grow focus:outline-none">
-                        <option value="">Select Target Stock Profile (Standard vs Variance)...</option>
-                        {availableStockProfiles.map(p => <option key={p.displayName} value={p.displayName}>{p.displayName}</option>)}
-                      </select>
-                      <input type="text" disabled placeholder="Size" value={line.actualSize || ''} className="bg-slate-950 border border-slate-800 text-slate-400 rounded px-2 py-1.5 text-xs w-24 font-mono text-center" />
-                      <input type="number" required placeholder="Qty" value={line.qty || ''} onChange={e => handleInvoiceItemChange(idx, 'qty', e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white w-24 font-bold" />
-                      <input type="number" required placeholder="Price" value={line.sellingPrice || ''} onChange={e => handleInvoiceItemChange(idx, 'sellingPrice', e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-amber-400 w-24 font-mono" />
-                      <input type="number" placeholder="Delivered" value={line.delivered || ''} onChange={e => handleInvoiceItemChange(idx, 'delivered', e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-blue-400 w-24 font-mono" />
+                    <div key={idx} className="flex flex-wrap items-center gap-2 bg-slate-900/60 p-3 rounded-lg border border-slate-800">
+                      
+                      <div className="flex flex-col grow">
+                        <input 
+                          type="text" 
+                          list={`stock-profiles-${idx}`} 
+                          required 
+                          placeholder="Select or type item code..." 
+                          value={line.itemCode || ''} 
+                          onChange={e => handleInvoiceItemChange(idx, 'itemCode', e.target.value.toUpperCase())} 
+                          className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white uppercase font-bold focus:outline-none" 
+                        />
+                        <datalist id={`stock-profiles-${idx}`}>
+                          {availableStockProfiles.map(p => (
+                            <option key={p.displayName} value={p.itemCode}>
+                              {p.displayName}
+                            </option>
+                          ))}
+                        </datalist>
+                      </div>
+                      
+                      <input type="text" disabled placeholder="Size" value={line.actualSize || ''} className="bg-slate-950 border border-slate-800 text-slate-400 rounded px-2 py-1.5 text-xs w-20 font-mono text-center" />
+                      
+                      {/* Ordered Quantity Input */}
+                      <div className="flex flex-col">
+                        <span className="text-[10px] text-slate-400 mb-0.5">Qty Ordered</span>
+                        <input type="number" required placeholder="Qty" value={line.qty || ''} onChange={e => handleInvoiceItemChange(idx, 'qty', e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white w-20 font-bold" />
+                      </div>
+
+                      {/* Number of Bales Supplied Input */}
+                      <div className="flex flex-col">
+                        <span className="text-[10px] text-emerald-400 mb-0.5 font-medium">Bales Supplied</span>
+                        <input type="number" placeholder="Supplied" value={line.delivered !== '' ? line.delivered : ''} onChange={e => handleInvoiceItemChange(idx, 'delivered', e.target.value)} className="bg-slate-900 border border-emerald-500/50 rounded px-2 py-1.5 text-xs text-emerald-400 w-24 font-bold" />
+                      </div>
+
+                      <div className="flex flex-col">
+                        <span className="text-[10px] text-slate-400 mb-0.5">Unit Price</span>
+                        <input type="number" required placeholder="Price" value={line.sellingPrice || ''} onChange={e => handleInvoiceItemChange(idx, 'sellingPrice', e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-amber-400 w-24 font-mono" />
+                      </div>
+
                       {invoiceItems.length > 1 && (
-                        <button type="button" onClick={() => removeInvoiceRow(idx)} className="text-rose-500 p-1"><Trash2 className="w-4 h-4" /></button>
+                        <button type="button" onClick={() => removeInvoiceRow(idx)} className="text-rose-500 p-1 cursor-pointer mt-4"><Trash2 className="w-4 h-4" /></button>
                       )}
                     </div>
                   ))}
                 </div>
 
                 <div className="flex justify-between items-center pt-2">
-                  <button type="button" onClick={() => setInvoiceItems([...invoiceItems, { itemCode: '', actualSize: '', qty: '', sellingPrice: '', delivered: '', selectedProfileKey: '' }])} className="text-xs text-amber-500 font-bold flex items-center gap-1"><Plus className="w-3 h-3" /> Add Item Line Row</button>
-                  <button type="submit" className="bg-emerald-500 text-slate-950 px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-400 transition">Post Commercial Invoice</button>
+                  <button type="button" onClick={() => setInvoiceItems([...invoiceItems, { itemCode: '', actualSize: '', qty: '', sellingPrice: '', delivered: '', selectedProfileKey: '', sourceConsignmentRef: '' }])} className="text-xs text-amber-500 font-bold flex items-center gap-1 cursor-pointer"><Plus className="w-3 h-3" /> Add Item Line Row</button>
+                  <button type="submit" className="bg-emerald-500 text-slate-950 px-4 py-2 rounded-xl text-xs font-bold hover:bg-emerald-400 transition cursor-pointer">Post Commercial Invoice</button>
                 </div>
               </form>
 
+              {/* Sales Transactions Ledger Table containing Supply Fulfillment Status Indicator */}
               <div className="overflow-x-auto border border-slate-800 rounded-xl">
                 <table className="w-full text-left text-xs border-collapse whitespace-nowrap">
                   <thead className="bg-slate-900 text-slate-400">
                     <tr>
-                      <th className="py-2.5 px-3">Date</th><th className="py-2.5 px-3">Item</th><th className="py-2.5 px-3">Size Allocation</th><th className="py-2.5 px-3">Qty</th><th className="py-2.5 px-3">Price</th><th className="py-2.5 px-3">Revenue</th><th className="py-2.5 px-3">Customer</th><th className="py-2.5 px-3">Paid</th><th className="py-2.5 px-3">Balance</th><th className="py-2.5 px-3 text-blue-400">Delivered</th><th className="py-2.5 px-3 text-amber-400">Pending</th>
+                      <th className="py-2.5 px-3">Date</th>
+                      <th className="py-2.5 px-3">Item</th>
+                      <th className="py-2.5 px-3">Size</th>
+                      <th className="py-2.5 px-3">Qty Ordered</th>
+                      <th className="py-2.5 px-3 text-emerald-400">Supplied</th>
+                      <th className="py-2.5 px-3">Price</th>
+                      <th className="py-2.5 px-3">Revenue</th>
+                      <th className="py-2.5 px-3">Customer</th>
+                      <th className="py-2.5 px-3 text-amber-400">Stock Source</th>
+                      <th className="py-2.5 px-3">Paid</th>
+                      <th className="py-2.5 px-3">Balance</th>
+                      {/* Supply Fulfillment Status Column Header */}
+                      <th className="py-2.5 px-3 text-center">Supply Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-850 font-mono">
@@ -730,14 +909,27 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                         <td className="py-2.5 px-3 text-slate-500">{row.date}</td>
                         <td className="py-2.5 px-3 font-sans font-bold text-white">{row.item}</td>
                         <td className="py-2.5 px-3 text-slate-400 text-xs">{row.actualSize}</td>
-                        <td className="py-2.5 px-3 text-white">{row.qty}</td>
+                        <td className="py-2.5 px-3 text-white font-bold">{row.qty}</td>
+                        <td className="py-2.5 px-3 text-emerald-400 font-bold">{row.delivered}</td>
                         <td>{currency}{row.sellingPrice.toLocaleString()}</td>
                         <td className="text-emerald-400 font-bold">{currency}{row.revenue.toLocaleString()}</td>
                         <td className="font-sans font-semibold text-slate-200">{row.customer}</td>
+                        <td className="text-amber-400 font-sans font-medium text-[11px]">{row.sourceRef}</td>
                         <td className="text-emerald-400">{currency}{row.amountPaid.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
                         <td className="text-rose-400">{currency}{row.balance.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
-                        <td className="text-blue-400 font-bold">{row.delivered}</td>
-                        <td className="text-amber-500 font-bold">{row.pending}</td>
+                        
+                        {/* Supply Fulfillment Status Indicator Cell (Supplied Complete vs Pending Dispatch) */}
+                        <td className="py-2.5 px-3 text-center">
+                          {row.pending === 0 ? (
+                            <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" /> Supplied (Complete)
+                            </span>
+                          ) : (
+                            <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" /> Pending ({row.pending} {unitLabel})
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -765,7 +957,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                 <div>
                   <input type="number" required placeholder="Price" value={byproductForm.price} onChange={e => setByproductForm({...byproductForm, price: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white" />
                 </div>
-                <button type="submit" className="bg-amber-500 text-slate-900 font-bold text-xs rounded-lg h-8 hover:bg-amber-400 transition">Add Salvage</button>
+                <button type="submit" className="bg-amber-500 text-slate-900 font-bold text-xs rounded-lg h-8 hover:bg-amber-400 transition cursor-pointer">Add Salvage</button>
               </form>
               <table className="w-full text-left text-sm border-collapse">
                 <thead>
@@ -798,7 +990,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                 <input type="text" required placeholder="Description" value={expenseForm.description} onChange={e => setExpenseForm({...expenseForm, description: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none" />
                 <div className="flex gap-2">
                   <input type="number" required placeholder="Amount" value={expenseForm.amount} onChange={e => setExpenseForm({...expenseForm, amount: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none grow" />
-                  <button type="submit" className="bg-rose-500 text-white font-bold text-xs rounded-lg px-4 h-8 transition hover:bg-rose-400">Add</button>
+                  <button type="submit" className="bg-rose-500 text-white font-bold text-xs rounded-lg px-4 h-8 transition hover:bg-rose-400 cursor-pointer">Add</button>
                 </div>
               </form>
               <table className="w-full text-left text-sm border-collapse">

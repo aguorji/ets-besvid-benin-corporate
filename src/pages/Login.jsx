@@ -3,54 +3,66 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
+/**
+ * Login Component
+ * Renders the secure access gateway for administrative and staff terminal logins.
+ */
 export default function Login() {
   const navigate = useNavigate();
   const { login } = useAuth();
 
+  // Component state management for credentials, errors, and submission feedback
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  /**
+   * Handles secure form submission, prevents browser reloads, and invokes context login.
+   */
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
+    e.preventDefault(); // Prevents standard form browser refresh behavior
+    e.stopPropagation(); // Stops bubbling to parent forms
+    setError('');
     setIsSubmitting(true);
 
-    if (!email || !password) {
-      setError('Please fill in all security credential fields.');
-      setIsSubmitting(false);
-      return;
-    }
-
     try {
+      // Authenticate via Auth Context
       const result = await login(email, password);
 
-      if (result.success) {
-        navigate('/dashboard');
-      } else {
-        setError(result.message);
+      if (!result.success) {
+        throw new Error(result.message);
       }
+
+      const userRole = result.user?.role;
+
+      // Role-based routing redirection
+      if (userRole === 'admin') {
+        navigate('/dashboard', { replace: true });
+      } else {
+        navigate('/terminal', { replace: true });
+      }
+
     } catch (err) {
-      setError('A routing interruption occurred during validation.');
+      setError(err.message || 'Invalid email or password credentials.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-off-white flex flex-col justify-center items-center p-4">
-      <div className="bg-white border border-gray-200 rounded-lg p-8 max-w-md w-full shadow-md space-y-6">
+    <div className="min-h-screen bg-slate-900 flex flex-col justify-center items-center p-4 font-sans">
+      <div className="bg-white border border-gray-200 rounded-xl p-8 max-w-md w-full shadow-2xl space-y-6">
         
-        {/* Header Title */}
+        {/* Header Branding */}
         <div className="text-center">
-          <h2 className="font-serif text-2xl font-bold text-navy">Corporate Terminal</h2>
+          <h2 className="font-serif text-2xl font-bold text-slate-900 tracking-tight">Corporate Terminal</h2>
           <p className="text-xs text-gray-500 mt-1 font-mono">Secure Access Gateway</p>
         </div>
 
-        {/* Error Notification Alert */}
+        {/* Error Feedback Alert */}
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded text-xs font-mono">
+          <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-xs font-mono shadow-sm">
             🚨 {error}
           </div>
         )}
@@ -63,10 +75,11 @@ export default function Login() {
             </label>
             <input
               type="text"
+              required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="manager@etsbesvid.com"
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-gold font-mono"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500 font-mono text-slate-900"
               disabled={isSubmitting}
             />
           </div>
@@ -77,10 +90,11 @@ export default function Login() {
             </label>
             <input
               type="password"
+              required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:border-gold font-mono"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500 font-mono text-slate-900"
               disabled={isSubmitting}
             />
           </div>
@@ -88,19 +102,20 @@ export default function Login() {
           <button
             type="submit"
             disabled={isSubmitting}
-            className={`w-full mt-2 bg-navy text-white text-xs font-bold uppercase tracking-wider py-3 rounded cursor-pointer border-none transition-colors ${
-              isSubmitting ? 'bg-navy/50 cursor-not-allowed animate-pulse' : 'hover:bg-navy/90'
+            className={`w-full mt-2 bg-slate-900 text-white text-xs font-bold uppercase tracking-wider py-3 rounded-xl cursor-pointer border-none transition-all shadow-md ${
+              isSubmitting ? 'bg-slate-900/50 cursor-not-allowed animate-pulse' : 'hover:bg-slate-800'
             }`}
           >
             {isSubmitting ? 'Verifying Credentials...' : 'Establish Secure Connection'}
           </button>
         </form>
 
-        {/* Return Link */}
+        {/* Home Navigation Link */}
         <div className="text-center pt-2 border-t border-gray-100">
           <button 
+            type="button"
             onClick={() => navigate('/')}
-            className="text-xs text-gray-400 hover:text-gold font-medium bg-transparent border-none cursor-pointer"
+            className="text-xs text-gray-400 hover:text-amber-600 font-medium bg-transparent border-none cursor-pointer transition"
           >
             ← Return to Corporate Home
           </button>

@@ -36,9 +36,9 @@ export const loginUser = async (req, res) => {
   }
 };
 
-// @desc     Admin Only: Create New Staff Accounts
-// @route    POST /api/auth/create-staff
-// @access   Private/Admin
+ // @desc    Admin Only: Create New Staff Accounts
+// @route   POST /api/auth/create-staff
+// @access  Private/Admin
 export const createStaffAccount = async (req, res) => {
   const { name, email, password, role } = req.body;
 
@@ -67,6 +67,8 @@ export const createStaffAccount = async (req, res) => {
     });
 
   } catch (error) {
-    return res.status(500).json({ error: "Failed to initialize staff profile." });
+    // 🔍 This will print the exact failure reason in your backend terminal
+    console.error("🚨 Create Staff Error Stack:", error);
+    return res.status(500).json({ error: "Failed to initialize staff profile.", details: error.message });
   }
 };

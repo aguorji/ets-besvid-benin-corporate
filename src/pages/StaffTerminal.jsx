@@ -630,7 +630,6 @@ export default function StaffTerminal() {
                           <tr key={item.id} className="border-b border-slate-800 text-slate-200">
                             <td className="py-3 px-2 font-bold text-white">{item.item}</td>
                             <td className="py-3 px-2 font-mono text-slate-400 text-xs">{item.stdSize}</td>
-                            {/* Read-Only Price Display for Staff */}
                             <td className="py-3 px-2 font-mono text-emerald-400 font-semibold">
                               {currency}{Number(item.stdPrice || 0).toLocaleString()}
                             </td>
@@ -664,7 +663,7 @@ export default function StaffTerminal() {
                     </div>
                     <div>
                       <label className="block text-xs text-slate-400 mb-1">Payment Type Method</label>
-                      <select value={invoicePaymentType} onChange={e => handlePaymentTypeChange(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full focus:outline-none cursor-pointer">
+                      <select value={invoicePaymentType} onChange={e => setInvoicePaymentType(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full focus:outline-none cursor-pointer">
                         <option value="Cash">Cash (Full Payment)</option>
                         <option value="Part payment">Part payment (Deposit)</option>
                         <option value="Credit">Credit (Full Debt)</option>
@@ -684,7 +683,6 @@ export default function StaffTerminal() {
                     </div>
                   </div>
 
-                  {/* Multi-Item Line Rows Management with Bales Supplied Input */}
                   <div className="space-y-2">
                     <label className="block text-xs text-slate-400 font-medium">Manifest Line Items Allocation & Supply Input</label>
                     {invoiceItems.map((line, idx) => (
@@ -737,7 +735,6 @@ export default function StaffTerminal() {
                   </div>
                 </form>
 
-                {/* Sales Transactions Ledger Table with Supply Status Indicator */}
                 <div className="overflow-x-auto border border-slate-800 rounded-xl">
                   <table className="w-full text-left text-xs border-collapse whitespace-nowrap">
                     <thead className="bg-slate-900 text-slate-400">
@@ -951,8 +948,8 @@ export default function StaffTerminal() {
                   </tr>
                 </thead>
                 <tbody>
-                  {consignments.map((row) => (
-                    <tr key={row.id} className="border-b border-slate-850 hover:bg-slate-800/30 transition text-slate-200">
+                  {consignments && consignments.map((row, index) => (
+                    <tr key={row.id || index} className="border-b border-slate-850 hover:bg-slate-800/30 transition text-slate-200">
                       <td className="py-4 px-4 text-xs text-slate-400 font-mono">{row.dateRegistered}</td>
                       <td className="py-4 px-4 font-bold text-white tracking-tight">{row.consignmentRef}</td>
                       <td className="py-4 px-4 text-xs">
@@ -965,7 +962,7 @@ export default function StaffTerminal() {
                         </span>
                       </td>
                       <td className="py-4 px-4 text-xs font-medium text-slate-300">
-                        {getUnitLabel(row.type)}: <span className="text-white font-bold">{row.totalVolumeCount}</span> | Wt: <span className="text-white font-bold">{row.totalGrossMassWeight.toLocaleString()} KGS</span>
+                      {getUnitLabel(row.type)}: <span className="text-white font-bold">{Number(row.totalVolumeCount || 0)}</span> | Wt: <span className="text-white font-bold">{Number(row.totalGrossMassWeight || 0).toLocaleString()} KGS</span>
                       </td>
                       <td className="py-4 px-4 text-xs">
                         <span className="bg-emerald-500/10 text-emerald-400 px-2.5 py-1 rounded-full border border-emerald-500/20 font-medium">

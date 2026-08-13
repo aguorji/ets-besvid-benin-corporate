@@ -1,69 +1,89 @@
-import { useState, useEffect } from 'react';
+// src/components/useConsignmentData.js
+import { useState, useEffect, useCallback } from 'react';
+import apiClient from '../api/client';
 
+/**
+ * useConsignmentData Custom Hook
+ * Centralizes the fetching, persistence, and state management of consignments,
+ * workspaces, and currency metrics across both Admin and Staff Terminal views.
+ */
 export function useConsignmentData() {
-  // 1. Global Currency Configuration State
-  const [currency, setCurrency] = useState(() => {
-    return localStorage.getItem('global_currency_symbol') || '₦';
-  });
+  const [consignments, setConsignments] = useState([]);
+  const [currency] = useState('₦'); // Default corporate currency symbol (Naira)
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // 2. Main Manifest Registry State
-  const [consignments, setConsignments] = useState(() => {
-    const saved = localStorage.getItem('manifest_consignments');
-    return saved ? JSON.parse(saved) : [
-      {
-        id: '1',
-        dateRegistered: '2026-07-30',
-        consignmentRef: 'GB-2026-001',
-        type: 'Giant Bales',
-        vesselIdentity: 'MSK Adriatic V-204',
-        estBaseLandingCost: 14500,
-        totalVolumeCount: 480, 
-        totalGrossMassWeight: 21600,
-        status: 'Active'
-      }
-    ];
-  });
+  /**
+   * Fetches live consignment records from the secure backend API.
+   */
+  const fetchConsignments = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
 
-  // Sync core structures to localStorage whenever states update
+      // Explicitly call the backend consignments endpoint
+      const response = await apiClient.get('/consignments');
+      
+      console.log("Raw API Consignments Response:", response.data);
+
+      // Normalize data to ensure both backend field styles (_id vs id, consignment_ref vs consignmentRef) work seamlessly
+      const rawData = Array.isArray(response.data) ? response.data : (response.data.consignments || []);
+      
+      const normalized = rawData.map(item => ({
+        id: item._id || item.id,
+        consignmentRef: item.consignment_ref || item.consignmentRef || 'N/A',
+        type: item.type === 'giant_bale' ? 'Giant Bales' : (item.type || 'Direct Container'),
+        totalVolumeCount: item.totalVolumeCount || item.total_volume_count || 0,
+        totalGrossMassWeight: item.totalGrossMassWeight || item.total_landing_cost || item.totalGrossWeight || 0,
+        status: item.status || 'Active',
+        dateRegistered: item.createdAt ? new Date(item.createdAt).toLocaleDateString() : new Date().toLocaleDateString(),
+        raw: item
+      }));
+
+      setConsignments(normalized);
+    } catch (err) {
+      console.error("Failed to fetch backend consignments:", err);
+      setError("Failed to synchronize active consignments from database.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Fetch data automatically when the hook initializes
   useEffect(() => {
-    localStorage.setItem('global_currency_symbol', currency);
-  }, [currency]);
+    fetchConsignments();
+  }, [fetchConsignments]);
 
-  useEffect(() => {
-    localStorage.setItem('manifest_consignments', JSON.stringify(consignments));
-  }, [consignments]);
-
-  // 3. Dynamic Workplace Workspace Store Manager
-  // Standardizing the default empty template structure
-  const DEFAULT_WORKSPACE = {
-    productionList: [],
-    pricelist: [],
-    salesLog: [],
-    byproductSales: [],
-    expenses: []
-  };
-
+  /**
+   * Retrieves specific workspace production/sales logs from local storage mapped by ID.
+   */
   const getWorkspaceData = (consignmentId) => {
-    if (!consignmentId) return DEFAULT_WORKSPACE;
-    const saved = localStorage.getItem(`workspace_${consignmentId}`);
-    return saved ? JSON.parse(saved) : DEFAULT_WORKSPACE;
+    try {
+      const data = localStorage.getItem(`workspace_${consignmentId}`);
+      return data ? JSON.parse(data) : {};
+    } catch (e) {
+      console.error("Error reading workspace data:", e);
+      return {};
+    }
   };
 
-  // CRITICAL FIX: This updates both localStorage AND alerts React to trigger UI updates
-  const saveWorkspaceData = (consignmentId, data) => {
-    if (!consignmentId) return;
-    localStorage.setItem(`workspace_${consignmentId}`, JSON.stringify(data));
-    
-    // Optional: Forces a safe state updates broadcast if you use this hook 
-    // across multiple distant parent/child tree nodes
-    window.dispatchEvent(new Event('storage_workspace_update'));
+  /**
+   * Saves workspace logs locally for operation continuity.
+   */
+  const saveWorkspaceData = (consignmentId, workspaceData) => {
+    try {
+      localStorage.setItem(`workspace_${consignmentId}`, JSON.stringify(workspaceData));
+    } catch (e) {
+      console.error("Error saving workspace data:", e);
+    }
   };
 
   return {
-    currency,
-    setCurrency,
     consignments,
-    setConsignments,
+    currency,
+    loading,
+    error,
+    refreshConsignments: fetchConsignments,
     getWorkspaceData,
     saveWorkspaceData
   };

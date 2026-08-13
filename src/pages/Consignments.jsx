@@ -1,14 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2, Ship, Plus, X, CheckCircle, AlertCircle, Edit, Save } from 'lucide-react';
+import apiClient from '../api/client';
 
+/**
+ * Consignments Component
+ * Manages the admin consignment entry registry, allowing users to view,
+ * create, and modify shipment manifests with backend synchronization via Axios.
+ */
 export default function Consignments() {
+  // State management for consignment records, loading status, and error alerts
   const [consignments, setConsignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   
+  // State controls for displaying the form drawer and tracking edit mode
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   
+  // Form input field states for creating or updating a consignment
   const [formData, setFormData] = useState({
     consignment_ref: '',
     type: 'direct_container',
@@ -16,34 +25,43 @@ export default function Consignments() {
     notes: ''
   });
   
+  // Submission loading state and response message feedback
   const [submitLoading, setSubmitLoading] = useState(false);
   const [formMessage, setFormMessage] = useState({ type: '', text: '' });
 
+  /**
+   * Asynchronously fetches all consignment records from the backend API.
+   */
   const fetchData = async () => {
     try {
       setLoading(true);
       setError(null);
-      const response = await fetch('/api/consignments');
-      if (!response.ok) throw new Error(`Server status returned: ${response.status}`);
-      const data = await response.json();
-      setConsignments(data);
+      const response = await apiClient.get('/consignments');
+      setConsignments(response.data);
     } catch (err) {
-      console.error(err);
+      console.error("Failed to fetch consignments from API:", err);
       setError("Failed to sync consignment data with backend.");
     } finally {
       setLoading(false);
     }
   };
 
+  // Trigger initial data fetch when component mounts
   useEffect(() => {
     fetchData();
   }, []);
 
+  /**
+   * Handles changes to form input fields and updates form state dynamically.
+   */
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  /**
+   * Populates the form with existing data to prepare for editing a selected consignment.
+   */
   const startModification = (item) => {
     setEditingId(item._id);
     setFormData({
@@ -56,6 +74,9 @@ export default function Consignments() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  /**
+   * Resets form values, clears editing targets, and closes the form section.
+   */
   const resetFormState = () => {
     setEditingId(null);
     setShowAddForm(false);
@@ -63,28 +84,30 @@ export default function Consignments() {
     setFormMessage({ type: '', text: '' });
   };
 
+  /**
+   * Handles form submission for creating a new consignment or updating an existing one.
+   */
   const handleFormSubmit = async (e) => {
     e.preventDefault();
     setSubmitLoading(true);
     setFormMessage({ type: '', text: '' });
 
-    const targetUrl = editingId ? `/api/consignments/${editingId}` : '/api/consignments';
-    const targetMethod = editingId ? 'PUT' : 'POST';
+    const payload = {
+      consignment_ref: formData.consignment_ref.trim(),
+      type: formData.type,
+      total_landing_cost: Number(formData.total_landing_cost) || 0,
+      notes: formData.notes.trim()
+    };
 
     try {
-      const response = await fetch(targetUrl, {
-        method: targetMethod,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          consignment_ref: formData.consignment_ref.trim(),
-          type: formData.type,
-          total_landing_cost: Number(formData.total_landing_cost) || 0,
-          notes: formData.notes.trim()
-        })
-      });
-
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.message || 'Transaction submission rejected.');
+      let response;
+      if (editingId) {
+        // Send PUT request if editing an existing record
+        response = await apiClient.put(`/consignments/${editingId}`, payload);
+      } else {
+        // Send POST request if creating a new record
+        response = await apiClient.post('/consignments', payload);
+      }
 
       setFormMessage({
         type: 'success',
@@ -96,7 +119,9 @@ export default function Consignments() {
       }
       fetchData();
     } catch (err) {
-      setFormMessage({ type: 'error', text: err.message });
+      console.error("Failed to save consignment to backend:", err);
+      const errorMsg = err.response?.data?.message || err.message || 'Transaction submission rejected.';
+      setFormMessage({ type: 'error', text: errorMsg });
     } finally {
       setSubmitLoading(false);
     }
@@ -121,7 +146,7 @@ export default function Consignments() {
         </div>
       </header>
 
-      {/* Intake / Modification Panel */}
+      {/* Intake / Modification Panel Form Section */}
       {showAddForm && (
         <section className="max-w-7xl mx-auto px-6 mt-6">
           <div className="bg-white border-l-4 border-amber-500 rounded shadow-sm p-6">
@@ -217,7 +242,7 @@ export default function Consignments() {
         </section>
       )}
 
-      {/* Primary Data Grid */}
+      {/* Primary Data Grid Display Section */}
       <main className="max-w-7xl mx-auto px-6 mt-8">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400">

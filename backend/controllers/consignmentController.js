@@ -14,12 +14,16 @@ export const registerConsignment = async (req, res) => {
       return res.status(400).json({ message: `Consignment reference '${consignment_ref}' already exists.` });
     }
 
+    // Preserve the exact category string sent from the frontend modal dropdown
+    const assignedType = type || 'Giant Bales';
+
     const consignment = await Consignment.create({
-      consignment_ref,
-      type,
-      total_landing_cost,
-      notes,
-      'processing_run.total_raw_weight': type === 'giant_bale' ? total_raw_weight : 0
+      consignment_ref: consignment_ref.trim(),
+      type: assignedType, // 👈 Correctly saves 'Shoes', 'Bags', 'Direct Bales', or 'Giant Bales'
+      cost_pool: {
+        base_purchase_cost: Number(total_landing_cost) || 0
+      },
+      'processing_run.total_raw_weight': (assignedType.toLowerCase().includes('giant')) ? Number(total_raw_weight) || 0 : 0
     });
 
     res.status(201).json(consignment);

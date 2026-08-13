@@ -2,16 +2,21 @@
 import { createContext, useState, useEffect, useContext } from 'react';
 import apiClient from '../api/client';
 
+// Create the authentication context object
 const AuthContext = createContext(null);
 
+/**
+ * AuthProvider Component
+ * Manages global authentication state, token persistence, login execution, and logout logic.
+ */
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Initialize and validate stored user session tokens upon component mount
   useEffect(() => {
     const initializeAuth = () => {
       try {
-        // Check multiple fallback storage names used across components
         const token = localStorage.getItem('ets_token') || localStorage.getItem('token');
         const storedUser = localStorage.getItem('ets_user') || localStorage.getItem('userInfo');
         
@@ -25,12 +30,13 @@ export const AuthProvider = ({ children }) => {
             token: token
           };
 
-          // Synchronize keys so both client and context match
+          // Synchronize keys across local storage mechanisms
           localStorage.setItem('ets_token', token);
           localStorage.setItem('ets_user', JSON.stringify(normalizedUser));
           
           setUser(normalizedUser);
         } else {
+          // Clear invalid or expired tokens
           localStorage.removeItem('ets_token');
           localStorage.removeItem('ets_user');
           localStorage.removeItem('userInfo');
@@ -48,11 +54,22 @@ export const AuthProvider = ({ children }) => {
     initializeAuth();
   }, []);
 
-  const login = async (email, password) => {
+  /**
+   * Executes user authentication. Supports either email/password credentials or pre-fetched user payloads.
+   */
+  const login = async (emailOrPayload, password) => {
     try {
-      const response = await apiClient.post('/auth/login', { email, password });
-      const data = response.data;
-      const token = data.token || data.accessToken;
+      let data, token;
+
+      // Handle direct payload objects vs. credential string inputs
+      if (typeof emailOrPayload === 'object' && emailOrPayload !== null) {
+        data = emailOrPayload;
+        token = data.token || data.accessToken;
+      } else {
+        const response = await apiClient.post('/auth/login', { email: emailOrPayload, password });
+        data = response.data;
+        token = data.token || data.accessToken;
+      }
 
       if (!token) {
         throw new Error("No token returned from server structure.");
@@ -66,6 +83,7 @@ export const AuthProvider = ({ children }) => {
         token: token
       };
 
+      // Persist user details and tokens securely in local storage
       localStorage.setItem('ets_token', token);
       localStorage.setItem('ets_user', JSON.stringify(userPayload));
       localStorage.setItem('userInfo', JSON.stringify(userPayload));
@@ -73,7 +91,7 @@ export const AuthProvider = ({ children }) => {
       setUser(userPayload);
       return { success: true, user: userPayload };
     } catch (error) {
-      const backendMessage = error.response?.data?.error || error.response?.data?.message;
+      const backendMessage = error.response?.data?.error || error.response?.data?.message || error.message;
       return {
         success: false,
         message: backendMessage || 'Authentication failed. Server unreachable.'
@@ -81,6 +99,9 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  /**
+   * Clears active sessions and redirects the user back to the login gateway.
+   */
   const logout = () => {
     localStorage.removeItem('ets_token');
     localStorage.removeItem('ets_user');
@@ -96,6 +117,9 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
+/**
+   * Custom hook to consume authentication context safely across components.
+   */
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {

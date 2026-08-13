@@ -30,10 +30,12 @@ import { AuthProvider, useAuth } from './context/AuthContext';
  * Directs 'user' (staff) accounts to the simplified Staff Terminal
  * and 'admin' accounts to the main Executive Dashboard.
  */
+
 const RoleBasedDashboard = () => {
   const { user } = useAuth();
 
-  if (user?.role === 'user') {
+  // Recognize both 'user' and 'staff' roles for the terminal view
+  if (user?.role === 'user' || user?.role === 'staff') {
     return <StaffTerminal user={user} />;
   }
 

@@ -15,7 +15,9 @@ import * as XLSX from 'xlsx';
 export default function ConsignmentCommandCenter({ consignment, currency, initialData, onSaveData, onBack, allConsignmentsData, onCrossConsignmentStockUpdate }) {
   const isDirectCargo = consignment?.type !== 'Giant Bales';
   const unitLabel = (consignment?.type === 'Shoes' || consignment?.type === 'Bags') ? 'Sack' : 'Bale';
-  const [activeTab, setActiveTab] = useState(isDirectCargo ? 'pricelist' : 'production');
+  
+  // Always default to 'production' tab so the ledger is visible instantly upon opening
+  const [activeTab, setActiveTab] = useState('production');
 
   // Initialize operational workspace state variables from persistent storage
   const [productionList, setProductionList] = useState(initialData.productionList || []);
@@ -124,7 +126,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     setProdForm({ item: '', unit: 'KGS per Bale', stdSize: '55KG', qty: '', actualSize: '55KG' });
   };
 
-  // Handle uploading and parsing Excel manifest packing lists
+  // Handle uploading and parsing Excel manifest packing lists[cite: 5]
   const handleExcelUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -410,7 +412,6 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   };
 
   // Cross-Consignment Stock Inspection Engine
-  // Checks current consignment stock first; if unavailable, inspects other registered consignments.
   const checkAndResolveStockAvailability = (itemCode, requestedQty, size) => {
     const currentStockItem = liveStockLedger.find(s => s.item.toLowerCase() === itemCode.toLowerCase() && s.actualSize === size);
     if (currentStockItem && currentStockItem.balance >= requestedQty) {
@@ -470,7 +471,6 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
         item.sourceConsignmentRef = consignment.consignmentRef;
       }
       
-      // Ensure supplied/delivered quantity defaults to 0 if left blank
       item.delivered = item.delivered !== '' && !isNaN(item.delivered) ? Number(item.delivered) : 0;
     }
 
@@ -538,7 +538,6 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     setExpenseForm({ date: '', category: '', description: '', amount: '' });
   };
 
-  // Flatten sales log items into detailed rows, calculating pending vs delivered fulfillment status
   const detailedSalesRows = useMemo(() => {
     const entries = [];
     salesLog.forEach(inv => {
@@ -602,11 +601,12 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     };
   }, [salesLog, byproductSales, grandTotalStockAssetValue, expenses, consignment]);
 
+  // Production Ledger and Byproduct Sales tabs are now included for all consignments
   const tabs = [
-    ...(!isDirectCargo ? [{ id: 'production', name: 'Production Ledger', icon: Layers }] : []),
+    { id: 'production', name: 'Production Ledger', icon: Layers },
     { id: 'pricelist', name: 'Pricelist Matrix', icon: TrendingUp },
     { id: 'sales', name: 'Sales Ledger Engine', icon: ShoppingBag },
-    ...(!isDirectCargo ? [{ id: 'byproduct', name: 'Byproduct Sales', icon: BarChart2 }] : []),
+    { id: 'byproduct', name: 'Byproduct Sales', icon: BarChart2 },
     { id: 'expenses', name: 'Operational Expenses', icon: DollarSign },
     { id: 'stock', name: 'Live Stock Ledger', icon: FileText },
     { id: 'debts', name: 'Debt Tracking Analysis', icon: Users },
@@ -629,7 +629,8 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
           </p>
         </div>
 
-        {!isDirectCargo && activeTab === 'production' && (
+        {/* Upload Manifest Packing List Button for Production Ledger - Active for all consignments */}
+        {activeTab === 'production' && (
           <div className="flex items-center bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 gap-3 shadow-md">
             <label className="text-xs text-slate-300 font-medium flex items-center gap-2 cursor-pointer hover:text-amber-400 transition">
               <Upload className="w-4 h-4 text-amber-500" />
@@ -666,7 +667,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
 
         <div className="xl:col-span-3 bg-slate-800/40 border border-slate-850 p-6 rounded-2xl shadow-inner backdrop-blur-sm">
           
-          {activeTab === 'production' && !isDirectCargo && (
+          {activeTab === 'production' && (
             <div className="space-y-6">
               <div className="flex justify-between items-center border-b border-slate-800 pb-2">
                 <h2 className="text-xl font-semibold text-white">Production Tracking Log Run</h2>
@@ -689,7 +690,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                   <input type="text" value={prodForm.stdSize} onChange={e => setProdForm({...prodForm, stdSize: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-400 mb-1">Quantity (Bales)</label>
+                  <label className="block text-xs text-slate-400 mb-1">Quantity ({unitLabel}s)</label>
                   <input type="number" required placeholder="0" value={prodForm.qty} onChange={e => setProdForm({...prodForm, qty: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />
                 </div>
                 <div>
@@ -718,7 +719,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                   </thead>
                   <tbody>
                     {productionList.length === 0 ? (
-                      <tr><td colSpan="7" className="py-8 text-center text-slate-500 text-xs">No records logged.</td></tr>
+                      <tr><td colSpan="7" className="py-8 text-center text-slate-500 text-xs">No records logged. You can upload an Excel manifest above or add entries manually.</td></tr>
                     ) : (
                       productionList.map((p) => (
                         <tr key={p.id} className="border-b border-slate-800 text-slate-200 hover:bg-slate-800/20">
@@ -799,7 +800,6 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
             <div className="space-y-8">
               <h2 className="text-xl font-semibold text-white">Commercial Invoice Registry</h2>
               
-              {/* Out of Stock Warning Alert Banner */}
               {stockAlert && (
                 <div className="bg-rose-500/10 border border-rose-500/40 text-rose-400 px-4 py-3 rounded-xl text-xs flex items-center gap-2 shadow-lg">
                   <AlertCircle className="w-5 h-5 shrink-0" />
@@ -853,13 +853,11 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                       
                       <input type="text" disabled placeholder="Size" value={line.actualSize || ''} className="bg-slate-950 border border-slate-800 text-slate-400 rounded px-2 py-1.5 text-xs w-20 font-mono text-center" />
                       
-                      {/* Ordered Quantity Input */}
                       <div className="flex flex-col">
                         <span className="text-[10px] text-slate-400 mb-0.5">Qty Ordered</span>
                         <input type="number" required placeholder="Qty" value={line.qty || ''} onChange={e => handleInvoiceItemChange(idx, 'qty', e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white w-20 font-bold" />
                       </div>
 
-                      {/* Number of Bales Supplied Input */}
                       <div className="flex flex-col">
                         <span className="text-[10px] text-emerald-400 mb-0.5 font-medium">Bales Supplied</span>
                         <input type="number" placeholder="Supplied" value={line.delivered !== '' ? line.delivered : ''} onChange={e => handleInvoiceItemChange(idx, 'delivered', e.target.value)} className="bg-slate-900 border border-emerald-500/50 rounded px-2 py-1.5 text-xs text-emerald-400 w-24 font-bold" />
@@ -883,7 +881,6 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                 </div>
               </form>
 
-              {/* Sales Transactions Ledger Table containing Supply Fulfillment Status Indicator */}
               <div className="overflow-x-auto border border-slate-800 rounded-xl">
                 <table className="w-full text-left text-xs border-collapse whitespace-nowrap">
                   <thead className="bg-slate-900 text-slate-400">
@@ -899,7 +896,6 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                       <th className="py-2.5 px-3 text-amber-400">Stock Source</th>
                       <th className="py-2.5 px-3">Paid</th>
                       <th className="py-2.5 px-3">Balance</th>
-                      {/* Supply Fulfillment Status Column Header */}
                       <th className="py-2.5 px-3 text-center">Supply Status</th>
                     </tr>
                   </thead>
@@ -918,7 +914,6 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                         <td className="text-emerald-400">{currency}{row.amountPaid.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
                         <td className="text-rose-400">{currency}{row.balance.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
                         
-                        {/* Supply Fulfillment Status Indicator Cell (Supplied Complete vs Pending Dispatch) */}
                         <td className="py-2.5 px-3 text-center">
                           {row.pending === 0 ? (
                             <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
@@ -938,7 +933,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
             </div>
           )}
 
-          {activeTab === 'byproduct' && !isDirectCargo && (
+          {activeTab === 'byproduct' && (
             <div className="space-y-6">
               <h2 className="text-xl font-semibold text-white">ByProduct Salvage Monetization Ledger</h2>
               <form onSubmit={handleAddByproduct} className="grid grid-cols-2 md:grid-cols-6 gap-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">

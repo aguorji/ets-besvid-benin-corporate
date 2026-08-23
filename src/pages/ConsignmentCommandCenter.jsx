@@ -5,6 +5,7 @@ import {
   DollarSign, BarChart2, Users, Wallet, Plus, Trash2, ArrowLeft, Upload, AlertCircle, CheckCircle2 
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import apiClient from '../api/client';
 
 /**
  * ConsignmentCommandCenter Component
@@ -126,7 +127,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     setProdForm({ item: '', unit: 'KGS per Bale', stdSize: '55KG', qty: '', actualSize: '55KG' });
   };
 
-  // Handle uploading and parsing Excel manifest packing lists[cite: 5]
+  // Handle uploading and parsing Excel manifest packing lists
   const handleExcelUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -241,9 +242,23 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     });
   };
 
-  // Handle editing item standard prices in the pricelist matrix
-  const handlePricelistChange = (id, field, value) => {
-    setPricelist(prev => prev.map(item => item.id === id ? { ...item, [field]: Number(value) } : item));
+  // Handle editing item standard prices in the pricelist matrix and syncing to backend API
+  const handlePricelistChange = async (id, field, value) => {
+    const numericValue = Number(value);
+    
+    // 1. Update local state immediately for smooth UI responsiveness
+    setPricelist(prev => prev.map(item => item.id === id ? { ...item, [field]: numericValue } : item));
+
+    // 2. Sync price update to the backend database so other terminals reflect it instantly
+    if (field === 'stdPrice') {
+      try {
+        await apiClient.put(`/api/products/${id}`, {
+          basePrice: numericValue
+        });
+      } catch (error) {
+        console.error("Failed to sync price update to server:", error.response?.data || error.message);
+      }
+    }
   };
 
   // Compile available stock profiles across ALL consignments for dropdown and manual entry mapping
@@ -587,7 +602,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     const totalRevenue = totalItemRevenue + byproductRevenue;
     const stockValue = grandTotalStockAssetValue;
     const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-    const estBaseLandingCost = Number(consignment?.estBaseLandingCost || 0);
+    const estBaseLandingCost = Number(consignment?.total_landing_cost || consignment?.estBaseLandingCost || 0);
     
     return {
       totalItemRevenue,
@@ -621,11 +636,11 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
             <ArrowLeft className="w-4 h-4 mr-1" /> Back to Workspace Grid
           </button>
           <h1 className="text-2xl font-bold tracking-tight text-white">
-            Consignment Workspace: <span className="text-amber-500">{consignment?.consignmentRef || 'N/A'}</span>
+            Consignment Workspace: <span className="text-amber-500">{consignment?.consignment_ref || consignment?.consignmentRef || 'N/A'}</span>
           </h1>
           <p className="text-slate-400 text-xs mt-1">
             Category Profile: <span className="text-amber-400 font-semibold">{consignment?.type}</span> | 
-            Manifest Volume: <span className="text-slate-200">{consignment?.totalVolumeCount} {unitLabel}s ({consignment?.totalGrossMassWeight} KGS)</span>
+            Manifest Volume: <span className="text-slate-200">{consignment?.totalVolumeCount || 0} {unitLabel}s ({consignment?.totalGrossMassWeight || 0} KGS)</span>
           </p>
         </div>
 

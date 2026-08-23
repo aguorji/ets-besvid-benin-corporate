@@ -10,12 +10,15 @@ const ConsignmentSchema = new mongoose.Schema({
   arrival_date: { type: Date, default: Date.now },
   status: { type: String, enum: ['Active', 'Closed'], default: 'Active' },
   
-  // ADDED: Consignment Category Type
+  // Consignment Category Type
   type: { 
     type: String, 
     required: true, 
     default: 'Giant Bales' 
   },
+
+  // Root-level landing cost field
+  total_landing_cost: { type: Number, default: 0 },
 
   // 1. FINANCIAL COST POOL (Capital Outlays)
   cost_pool: {

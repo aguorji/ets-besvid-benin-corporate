@@ -1,5 +1,6 @@
 // backend/controllers/productController.js
 import ProductItem from '../models/ProductItem.js';
+import Consignment from '../models/Consignment.js';
 
 // @desc    Register a completely new root product type (e.g., LMD, MCSH)
 // @route   POST /api/products
@@ -42,6 +43,48 @@ export const getProducts = async (req, res) => {
     res.status(200).json(products);
   } catch (error) {
     res.status(500).json({ message: 'Error retrieving product registry', error: error.message });
+  }
+};
+
+// @desc    Update an existing product's catalog details and propagate to active consignments
+// @route   PUT /api/products/:productId
+export const updateProductCatalogItem = async (req, res) => {
+  try {
+    const { productId } = req.params;
+    const { itemCode, basePrice, description } = req.body;
+
+    // 1. Prepare update payload
+    const updateFields = {};
+    if (itemCode) updateFields.itemCode = itemCode.toUpperCase().trim();
+    if (basePrice !== undefined) updateFields.basePrice = Number(basePrice) || 0;
+    if (description !== undefined) updateFields.description = description.trim();
+
+    // 2. Update the global ProductItem catalog document
+    const updatedProduct = await ProductItem.findByIdAndUpdate(
+      productId,
+      updateFields,
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedProduct) {
+      return res.status(404).json({ message: 'Product item catalog reference not found.' });
+    }
+
+    // 3. Propagate price/name changes to active consignments so terminals reflect updates instantly
+    if (updateFields.basePrice !== undefined || updateFields.itemCode) {
+      await Consignment.updateMany(
+        { status: 'Active', "pricelist.item": { $regex: new RegExp(`^${updatedProduct.itemCode}$`, 'i') } },
+        { $set: { "pricelist.$[elem].stdPrice": updatedProduct.basePrice } },
+        { arrayFilters: [{ "elem.item": { $regex: new RegExp(`^${updatedProduct.itemCode}$`, 'i') } }] }
+      );
+    }
+
+    res.status(200).json({ 
+      message: 'Product catalog and active consignments updated successfully across all terminals.', 
+      updatedProduct 
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating pricelist matrix', error: error.message });
   }
 };
 

@@ -7,55 +7,96 @@ import Consignment from '../models/Consignment.js';
 import Sale from '../models/Sale.js'; 
 import Expense from '../models/Expense.js';
 import Byproduct from '../models/Byproduct.js';
-import ProductItem from '../models/ProductItem.js'; // 👈 Added for Product Catalog Sync
+import ProductItem from '../models/ProductItem.js'; // Added for Product Catalog Sync
+import { debugConsignment } from '../controllers/consignmentController.js'; // Added for debugging
 
 const router = express.Router();
 
+// ProductItem's unit field is a strict enum of 'KGS' or 'PCS', but Excel
+// data commonly has values like "KGS per Bale" — normalize before saving,
+// or ProductItem.create() throws a validation error for any new itemCode.
+function normalizeUnit(rawUnit) {
+  const u = (rawUnit || '').toUpperCase();
+  return u.includes('PCS') ? 'PCS' : 'KGS';
+}
+
 // Helper function to sync consignment production items into the master ProductItem catalog
-async function syncProductionToProducts(productionItems, consignmentRef) {
+async function syncProductionToProducts(productionItems, consignmentRef, consignmentId) {
   if (!productionItems || !Array.isArray(productionItems)) return;
 
   for (const row of productionItems) {
     const itemCode = (row.itemCode || '').toUpperCase().trim();
     if (!itemCode) continue;
 
+    const actualSize = Number(row.actualSize || row.standardSize || 0);
+    const standardSize = Number(row.standardSize || 0);
     const quantityBales = Number(row.balesQuantity || row.quantity || 0);
-    const basePrice = Number(row.adjustedPrice || row.priceStd || row.price || 0);
+    const basePrice = Number(row.priceStd || row.price || 0);
+    const adjPrice = Number(row.adjustedPrice || basePrice);
+    // ProductItem.VariationSchema requires size_type — derive it instead of
+    // omitting it (which previously failed schema validation on every row).
+    const sizeType = (actualSize && standardSize && actualSize !== standardSize)
+      ? 'adjusted'
+      : 'standard';
 
-    // 1. Find the root product or create it if it doesn't exist yet
-    let product = await ProductItem.findOne({ itemCode });
-    
-    if (!product) {
-      product = await ProductItem.create({
-        itemCode,
-        description: row.description || itemCode,
-        unit: row.unit || 'Bales',
-        standardSize: row.standardSize || 0,
-        stock_variations: []
-      });
+    // Unique per item + actual size within this consignment. Using just
+    // consignmentRef (the old behavior) collided across every item in the
+    // batch, since production_ref carries a UNIQUE index across the whole
+    // productitems collection, not just within one product — only the first
+    // item in any consignment could ever have been saved successfully.
+    const productionRef = `${consignmentRef}-${itemCode}-${actualSize}`;
+
+    try {
+      // 1. Find the root product or create it if it doesn't exist yet
+      let product = await ProductItem.findOne({ itemCode });
+
+      if (!product) {
+        product = await ProductItem.create({
+          itemCode,
+          description: row.description || itemCode,
+          unit: normalizeUnit(row.unit),
+          standardSize: standardSize || actualSize || 0,
+          basePrice,
+          stock_variations: []
+        });
+      }
+
+      // 2. Check if this specific batch reference already exists in stock_variations
+      const existingBatchIndex = product.stock_variations.findIndex(
+        v => v.production_ref === productionRef
+      );
+
+      if (existingBatchIndex > -1) {
+        // Update existing batch balance
+        const v = product.stock_variations[existingBatchIndex];
+        v.quantity_produced = quantityBales;
+        v.quantity_balance = quantityBales;
+        v.base_price = basePrice;
+        v.adj_price = adjPrice;
+        v.size_type = sizeType;
+        if (consignmentId) v.consignment_id = consignmentId;
+      } else {
+        // Push new batch/consignment variation — consignment_id, size_type,
+        // and adj_price are all required by the schema and were previously
+        // missing, which silently failed validation on every single row.
+        product.stock_variations.push({
+          production_ref: productionRef,
+          consignment_id: consignmentId,
+          actual_size: actualSize,
+          size_type: sizeType,
+          quantity_produced: quantityBales,
+          quantity_balance: quantityBales, // Crucial for terminal stock checking!
+          base_price: basePrice,
+          adj_price: adjPrice
+        });
+      }
+
+      await product.save();
+    } catch (err) {
+      // One bad row is now logged and skipped instead of silently killing
+      // the sync for every remaining item in the batch.
+      console.error(`syncProductionToProducts failed for itemCode "${itemCode}" (ref: ${productionRef}):`, err.message);
     }
-
-    // 2. Check if this specific batch reference already exists in stock_variations
-    const existingBatchIndex = product.stock_variations.findIndex(
-      v => v.production_ref === consignmentRef
-    );
-
-    if (existingBatchIndex > -1) {
-      // Update existing batch balance
-      product.stock_variations[existingBatchIndex].quantity_produced = quantityBales;
-      product.stock_variations[existingBatchIndex].quantity_balance = quantityBales;
-      product.stock_variations[existingBatchIndex].base_price = basePrice;
-    } else {
-      // Push new batch/consignment variation
-      product.stock_variations.push({
-        production_ref: consignmentRef,
-        quantity_produced: quantityBales,
-        quantity_balance: quantityBales, // Crucial for terminal stock checking!
-        base_price: basePrice
-      });
-    }
-
-    await product.save();
   }
 }
 
@@ -69,6 +110,9 @@ router.get('/', async (req, res) => {
   }
 });
 
+// DEBUG GET ROUTE FOR AA-22-26
+router.get('/debug/aa2226', debugConsignment);
+
 // POST: Parse manifest input structures securely into MongoDB instance & sync catalog
 router.post('/', async (req, res) => {
   try {
@@ -78,7 +122,7 @@ router.post('/', async (req, res) => {
     const newManifest = new Consignment({
       consignment_ref: consignmentRef,
       vessel_name: req.body.vessel_name,
-      type: req.body.type,                  
+      type: req.body.type,                      
       sub_type: req.body.sub_type || '', 
       total_bales_received: Number(req.body.total_bales_received) || 0,
       total_weight_received: Number(req.body.total_weight_received) || 0,
@@ -91,7 +135,7 @@ router.post('/', async (req, res) => {
     const saved = await newManifest.save();
 
     // 🔄 Automatically sync items to the Product Catalog for the Staff Terminal
-    await syncProductionToProducts(productionItems, consignmentRef);
+    await syncProductionToProducts(productionItems, consignmentRef, saved._id);
 
     res.status(201).json(saved);
   } catch (err) {
@@ -220,7 +264,7 @@ router.put('/:id/production', async (req, res) => {
     const updated = await consignment.save();
 
     // 🔄 Sync updated production items to Product Catalog
-    await syncProductionToProducts(production_items, consignment.consignment_ref);
+    await syncProductionToProducts(production_items, consignment.consignment_ref, consignment._id);
 
     res.json({ message: 'Production matrix layers aligned successfully.', updated });
   } catch (err) {

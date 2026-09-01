@@ -3,7 +3,7 @@ import {
   createProduct, 
   getProducts, 
   addStockVariation, 
-  updateProductCatalogItem // 👈 Import the update controller function
+  updateProductCatalogItem 
 } from '../controllers/productController.js';
 
 const router = express.Router();

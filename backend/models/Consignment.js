@@ -50,7 +50,24 @@ const ConsignmentSchema = new mongoose.Schema({
     estimated_mass_kg: { type: Number, default: 0 },
     assigned_financial_value: { type: Number, default: 0 },
     transferred_to_consignment_ref: { type: String, default: '' } 
-  }
+  },
+
+  // 5. PRODUCTION ITEMS
+  // This field did not exist before, so Mongoose's strict mode was silently
+  // dropping it on every save (see POST / and PUT /:id/production in
+  // consignmentRoutes.js, and GET /reconciliation/:id which reads it back).
+  // Field names match syncProductionToProducts() in consignmentRoutes.js
+  // exactly, since that's the live code path that consumes them.
+  production_items: [{
+    itemCode: { type: String, uppercase: true, trim: true },
+    description: String,
+    unit: String,
+    standardSize: Number,
+    actualSize: Number,
+    priceStd: Number,
+    adjustedPrice: Number,
+    balesQuantity: Number
+  }]
 }, { timestamps: true });
 
 export default mongoose.model('Consignment', ConsignmentSchema);

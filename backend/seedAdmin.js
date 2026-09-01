@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import User from './models/User.js'; // Ensure this path is correct relative to seedAdmin.js
+import User from './models/User.js';
 
 dotenv.config();
 
@@ -9,6 +9,15 @@ async function seed() {
     const uri = process.env.MONGO_URI;
     if (!uri) {
       console.error("🚨 Error: MONGO_URI is missing from your .env file!");
+      process.exit(1);
+    }
+
+    // Password now comes from .env instead of being hardcoded here. Add to
+    // your .env (never committed):
+    //   ADMIN_SEED_PASSWORD=<pick a real, private password>
+    const adminPassword = process.env.ADMIN_SEED_PASSWORD;
+    if (!adminPassword) {
+      console.error("🚨 Error: ADMIN_SEED_PASSWORD is missing from your .env file!");
       process.exit(1);
     }
 
@@ -22,9 +31,9 @@ async function seed() {
     if (adminUser) {
       console.log('🔄 Administrator exists. Updating password to ensure sync...');
       // Pass PLAIN TEXT. The model's pre-save middleware will automatically hash it!
-      adminUser.password = 'SecureAdmin2026!'; 
+      adminUser.password = adminPassword;
       await adminUser.save();
-      console.log('✔️ Password updated successfully to SecureAdmin2026!');
+      console.log('✔️ Password updated successfully.');
       process.exit(0);
     }
 
@@ -33,7 +42,7 @@ async function seed() {
     await User.create({
       name: "Managing Director",
       email: "admin@etsbesvid.com",
-      password: "SecureAdmin2026!", 
+      password: adminPassword,
       role: "admin"
     });
 

@@ -7,7 +7,7 @@ import ProductItem from '../models/ProductItem.js';
 // @route   POST /api/consignments
 export const registerConsignment = async (req, res) => {
   try {
-    const { consignment_ref, type, total_landing_cost, notes, total_raw_weight } = req.body;
+    const { consignment_ref, type, total_landing_cost, notes, total_raw_weight, pricelist } = req.body;
 
     const duplicate = await Consignment.findOne({ consignment_ref: consignment_ref.toUpperCase() });
     if (duplicate) {
@@ -21,11 +21,35 @@ export const registerConsignment = async (req, res) => {
       consignment_ref: consignment_ref.trim(),
       type: assignedType,
       total_landing_cost: parsedLandingCost, // 👈 Saved at root level for easy UI access
+      pricelist: pricelist || [],
       cost_pool: {
         base_purchase_cost: parsedLandingCost
       },
       'processing_run.total_raw_weight': (assignedType.toLowerCase().includes('giant')) ? Number(total_raw_weight) || 0 : 0
     });
+
+    // --- AUTO-SYNC CONSIGNMENT PRICELIST ITEMS TO GLOBAL PRODUCT CATALOG ---
+    if (pricelist && Array.isArray(pricelist) && pricelist.length > 0) {
+      for (const entry of pricelist) {
+        const code = entry.item || entry.itemCode;
+        if (code) {
+          await ProductItem.findOneAndUpdate(
+            { itemCode: code.toUpperCase().trim() },
+            { 
+              $setOnInsert: { 
+                itemCode: code.toUpperCase().trim(),
+                description: entry.description || 'Imported via Consignment Packing List',
+                unit: entry.unit || 'KGS',
+                standardSize: Number(entry.stdSize || entry.standardSize) || 0,
+                basePrice: Number(entry.stdPrice || entry.basePrice) || 0,
+                stock_variations: []
+              }
+            },
+            { upsert: true, new: true }
+          );
+        }
+      }
+    }
 
     res.status(201).json(consignment);
   } catch (error) {
@@ -238,7 +262,6 @@ export const getConsignmentReconciliation = async (req, res) => {
       return res.status(404).json({ message: 'Consignment registry record not found.' });
     }
 
-    // Sends the payload structured for your frontend reconciliation ledger sheet
     res.status(200).json({
       _id: consignment._id,
       consignment_ref: consignment.consignment_ref,
@@ -250,5 +273,52 @@ export const getConsignmentReconciliation = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Reconciliation data compilation failure', error: error.message });
+  }
+};
+
+// @desc    Sync all existing consignment pricelist items into the global ProductItem master collection
+// @route   POST /api/consignments/sync-catalog
+export const syncConsignmentProductsToMaster = async (req, res) => {
+  try {
+    const consignments = await Consignment.find({});
+    let addedCount = 0;
+
+    for (const con of consignments) {
+      if (con.pricelist && Array.isArray(con.pricelist)) {
+        for (const item of con.pricelist) {
+          const code = item.item || item.itemCode;
+          if (code) {
+            const cleanCode = code.toUpperCase().trim();
+            const exists = await ProductItem.findOne({ itemCode: cleanCode });
+            if (!exists) {
+              await ProductItem.create({
+                itemCode: cleanCode,
+                description: item.description || 'Extracted from Consignment',
+                unit: item.unit || 'KGS',
+                standardSize: Number(item.stdSize || item.standardSize) || 0,
+                basePrice: Number(item.stdPrice || item.basePrice) || 0,
+                stock_variations: []
+              });
+              addedCount++;
+            }
+          }
+        }
+      }
+    }
+
+    res.status(200).json({ message: `Successfully synced ${addedCount} items from existing consignments into the product catalog.` });
+  } catch (error) {
+    res.status(500).json({ message: 'Error syncing catalog items', error: error.message });
+  }
+};
+
+
+// --- TEMPORARY DEBUG ROUTE ---
+export const debugConsignment = async (req, res) => {
+  try {
+    const item = await Consignment.findOne({ consignment_ref: "AA-22-26" }).lean();
+    res.json(item);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 };

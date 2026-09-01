@@ -19,15 +19,35 @@ export default function Products() {
   const [formSubmitLoading, setFormSubmitLoading] = useState(false);
   const [formMessage, setFormMessage] = useState({ type: '', text: '' });
 
-  // Database Fetching Pipeline
+  // Handle Input Changes for Registration Form
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  // Database Fetching Pipeline with flexible data unpacking
   const fetchInventory = async () => {
     try {
       setLoading(true);
       setError(null);
-      // Use apiClient instead of raw fetch
       const response = await apiClient.get('/products');
-      // Axios stores the parsed JSON data automatically inside .data
-      setProducts(response.data);
+      
+      console.log("API Products Response:", response.data);
+
+      // Handle different possible backend response formats gracefully
+      let fetchedData = [];
+      if (Array.isArray(response.data)) {
+        fetchedData = response.data;
+      } else if (response.data && Array.isArray(response.data.products)) {
+        fetchedData = response.data.products;
+      } else if (response.data && Array.isArray(response.data.data)) {
+        fetchedData = response.data.data;
+      }
+
+      setProducts(fetchedData);
     } catch (err) {
       console.error("Backend connection error:", err);
       setError("Could not connect to live inventory. Please refresh or try again later.");
@@ -40,29 +60,51 @@ export default function Products() {
     fetchInventory();
   }, []);
 
-  // Submit New Master Product Row
+  // Submit New Master Product Row with Instant Optimistic State Update
   const handleFormSubmit = async (e) => {
     e.preventDefault();
     setFormSubmitLoading(true);
     setFormMessage({ type: '', text: '' });
 
     try {
-      // Use apiClient.post instead of fetch
-      const response = await apiClient.post('/products', {
+      const payload = {
         ...formData,
         standardSize: Number(formData.standardSize)
+      };
+
+      // 1. Post to backend
+      const response = await apiClient.post('/products', payload);
+      console.log("POST Product Response:", response.data);
+
+      // 2. Extract the newly created product from the backend response if available, 
+      // or construct it locally so it appears instantly without waiting for a GET round-trip.
+      const newProduct = response.data.product || response.data.data || response.data || payload;
+
+      // 3. Instantly prepend or append the new item to the existing products array
+      setProducts(prevProducts => {
+        // Avoid duplicates if backend already returned the full array
+        if (Array.isArray(newProduct)) {
+          return newProduct;
+        }
+        // Otherwise append/prepend the single new item
+        return [newProduct, ...prevProducts];
       });
 
       setFormMessage({ 
         type: 'success', 
-        text: `Product '${formData.itemCode.toUpperCase()}' registered successfully!` 
+        text: `Product '${formData.itemCode.toUpperCase()}' registered and synced successfully!` 
       });
+      
+      // Reset form inputs
       setFormData({ itemCode: '', description: '', unit: 'KGS', standardSize: '' });
       
-      // Dynamic live refresh
-      fetchInventory();
+      // 4. Trigger a secondary background fetch to ensure absolute DB alignment
+      setTimeout(() => {
+        fetchInventory();
+      }, 500);
+
     } catch (err) {
-      // Axios errors capture response messages inside err.response?.data?.message
+      console.error("Form submission error details:", err);
       const errorMsg = err.response?.data?.message || err.message || 'Failed to establish product entry.';
       setFormMessage({ type: 'error', text: errorMsg });
     } finally {
@@ -222,7 +264,7 @@ export default function Products() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredProducts.map(product => (
-              <div key={product._id || product.id} className="bg-white border border-navy/10 rounded overflow-hidden shadow-xs hover:shadow-md transition-all duration-300 flex flex-col">
+              <div key={product.itemCode} className="bg-white border border-navy/10 rounded overflow-hidden shadow-xs hover:shadow-md transition-all duration-300 flex flex-col">
                 <div className="h-32 bg-navy flex items-center justify-center relative overflow-hidden group">
                   <Package className="text-gold/20 w-12 h-12 transform group-hover:scale-110 transition-transform duration-500" />
                   <span className="absolute bottom-3 left-3 bg-navy/90 text-white font-mono text-[11px] tracking-wider px-2 py-0.5 rounded border border-white/10">

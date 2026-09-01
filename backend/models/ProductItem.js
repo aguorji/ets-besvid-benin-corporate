@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 
+// Define the schema for individual production batches or stock variations tied to a product
 const VariationSchema = new mongoose.Schema({
   production_ref: { type: String, required: true, index: { unique: true, sparse: true } },
   consignment_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Consignment', required: true },
@@ -16,18 +17,23 @@ const VariationSchema = new mongoose.Schema({
   stock_value: { type: Number, default: 0 }
 });
 
+// Define the master product schema for the catalog registry
 const ProductItemSchema = new mongoose.Schema({
   itemCode: { type: String, required: true, uppercase: true, trim: true },
   description: { type: String, required: true, trim: true },
   unit: { type: String, enum: ['KGS', 'PCS'], default: 'KGS' },
   standardSize: { type: Number, required: true },
   
-  // ADD THIS FIELD TO HOLD THE MASTER PRICE OF A STANDARD BALE
+  // Master baseline price for a standard bale/unit
   basePrice: { type: Number, required: true, default: 0 }, 
 
   stock_variations: [VariationSchema]
-}, { timestamps: true });
+}, { 
+  timestamps: true, 
+  collection: 'productitems' // Explicitly maps this model to the 'products' MongoDB collection to align with manually populated records
+});
 
+// Middleware to automatically recalculate stock balances and total values before saving any product document
 ProductItemSchema.pre('save', function(next) {
   this.stock_variations.forEach(v => {
     v.quantity_balance = v.quantity_produced - v.quantity_sold;

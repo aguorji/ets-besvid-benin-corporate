@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { useConsignmentData } from '../components/useConsignmentData'; 
 import GeneralStockModal from '../components/GeneralStockModal';
 import * as XLSX from 'xlsx';
+import axios from 'axios'; // 👈 Added for MongoDB backend synchronization
 
 /**
  * StaffTerminal Component
@@ -106,7 +107,33 @@ export default function StaffTerminal() {
     }
   };
 
-  const handleAddProduction = (e) => {
+  // 🔄 Helper function to sync production items directly to MongoDB backend
+  const persistProductionToServer = async (updatedProdList, successMessage) => {
+    if (!activeWorkspace) return;
+    try {
+      const formattedItems = updatedProdList.map(p => ({
+        itemCode: p.item,
+        unit: p.unit,
+        standardSize: p.stdSize,
+        actualSize: p.actualSize,
+        balesQuantity: p.qty,
+        priceStd: p.stdPrice || 0
+      }));
+
+      // Uses activeWorkspace.id or activeWorkspace._id depending on your backend schema ID field
+      const targetId = activeWorkspace.id || activeWorkspace._id;
+      await axios.put(`/api/consignments/${targetId}/production`, {
+        production_items: formattedItems
+      });
+
+      setSuccessMsg(successMessage);
+    } catch (err) {
+      console.error('MongoDB Sync Error:', err);
+      setErrorMsg('Production updated locally, but failed to sync to MongoDB database server.');
+    }
+  };
+
+  const handleAddProduction = async (e) => {
     e.preventDefault();
     if (!prodForm.item || !prodForm.qty || !activeWorkspace) return;
     const qtyNum = Number(prodForm.qty);
@@ -129,6 +156,10 @@ export default function StaffTerminal() {
     setProductionList(updatedProd);
     setPricelist(updatedPrice);
     saveWorkspaceData(activeWorkspace.id, { productionList: updatedProd, pricelist: updatedPrice, salesLog, byproductSales, expenses });
+    
+    // Sync with MongoDB backend server
+    await persistProductionToServer(updatedProd, 'Production item added and synced to MongoDB successfully.');
+    
     setProdForm({ item: '', unit: 'KGS per Bale', stdSize: '55KG', qty: '', actualSize: '55KG' });
   };
 
@@ -138,7 +169,7 @@ export default function StaffTerminal() {
     if (!file || !activeWorkspace) return;
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       const bstr = evt.target.result;
       const wb = XLSX.read(bstr, { type: 'binary' });
       const wsname = wb.SheetNames[0];
@@ -181,7 +212,9 @@ export default function StaffTerminal() {
       setProductionList(updatedProd);
       setPricelist(updatedPrice);
       saveWorkspaceData(activeWorkspace.id, { productionList: updatedProd, pricelist: updatedPrice, salesLog, byproductSales, expenses });
-      setSuccessMsg('Manifest packing list uploaded and processed successfully.');
+      
+      // Sync Excel manifest upload to MongoDB server
+      await persistProductionToServer(updatedProd, 'Manifest packing list uploaded, processed, and synced to MongoDB successfully.');
     };
     reader.readAsBinaryString(file);
   };
@@ -519,6 +552,13 @@ export default function StaffTerminal() {
           <div className="mb-4 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex items-center gap-3 text-emerald-400 text-sm shadow-lg">
             <CheckCircle2 className="w-5 h-5 shrink-0" />
             <span className="font-medium">{successMsg}</span>
+          </div>
+        )}
+
+        {errorMsg && (
+          <div className="mb-4 p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-center gap-3 text-rose-400 text-sm shadow-lg">
+            <AlertCircle className="w-5 h-5 shrink-0" />
+            <span className="font-medium">{errorMsg}</span>
           </div>
         )}
 

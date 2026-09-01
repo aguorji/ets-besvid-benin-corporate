@@ -86,7 +86,7 @@ export default function Dashboard() {
       <ConsignmentCommandCenter 
         consignment={activeWorkspace} 
         currency={currency}
-        initialData={getWorkspaceData(activeWorkspace.id)}
+        initialData={getWorkspaceData(activeWorkspace.id, activeWorkspace.raw)}
         onSaveData={(updatedData) => saveWorkspaceData(activeWorkspace.id, updatedData)}
         onBack={() => setActiveWorkspace(null)} 
       />

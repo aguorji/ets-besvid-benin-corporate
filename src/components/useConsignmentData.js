@@ -13,10 +13,6 @@ export function useConsignmentData() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Holds one pending debounce timer per consignment, so editing one
-  // workspace's fields doesn't cancel/interfere with another's pending save.
-  const syncTimers = useRef({});
-
   /**
    * Fetches live consignment records from the secure backend API.
    */
@@ -37,8 +33,20 @@ export function useConsignmentData() {
         id: item._id || item.id,
         consignmentRef: item.consignment_ref || item.consignmentRef || 'N/A',
         type: item.type === 'giant_bale' ? 'Giant Bales' : (item.type || 'Direct Container'),
-        totalVolumeCount: item.totalVolumeCount || item.total_volume_count || 0,
-        totalGrossMassWeight: item.totalGrossMassWeight || item.total_landing_cost || item.totalGrossWeight || 0,
+        totalVolumeCount: item.total_volume_count || item.totalVolumeCount || 0,
+        // Previously fell back to item.total_landing_cost here, which meant
+        // "gross weight" could silently display the landing cost instead —
+        // two different, unrelated quantities. Fixed to only ever read
+        // actual weight fields, defaulting to 0 (shown honestly as unknown)
+        // rather than a wrong number that looks plausible.
+        totalGrossMassWeight: item.total_gross_weight || item.totalGrossMassWeight || 0,
+        // total_landing_cost was never exposed as its own field before —
+        // anything trying to display "Base Landing Cost" from this
+        // normalized object had nothing to read. Kept in snake_case too
+        // since ConsignmentCommandCenter.jsx reads consignment?.total_landing_cost
+        // directly, not a camelCase version.
+        totalLandingCost: item.total_landing_cost || 0,
+        total_landing_cost: item.total_landing_cost || 0,
         status: item.status || 'Active',
         dateRegistered: item.createdAt ? new Date(item.createdAt).toLocaleDateString() : new Date().toLocaleDateString(),
         raw: item
@@ -75,9 +83,10 @@ export function useConsignmentData() {
       const stdSize = row.standardSize || 0;
       const actualSize = row.actualSize || stdSize;
       const isVariance = actualSize !== stdSize;
+      const rowId = `${item}-${actualSize}-${idx}`;
 
       productionList.push({
-        id: `${item}-${actualSize}-${idx}`,
+        id: rowId,
         item,
         unit: row.unit || '',
         stdSize,
@@ -87,7 +96,12 @@ export function useConsignmentData() {
       });
 
       if (!pricelistMap.has(item)) {
+        // id must be set here — handlePricelistChange in
+        // ConsignmentCommandCenter.jsx matches rows by id, and a missing id
+        // (undefined) matched EVERY row at once, causing one price edit to
+        // overwrite every item's price simultaneously.
         pricelistMap.set(item, {
+          id: rowId,
           item,
           unit: row.unit || '',
           stdSize,
@@ -98,7 +112,7 @@ export function useConsignmentData() {
       }
       const entry = pricelistMap.get(item);
       if (isVariance) {
-        entry.varianceBales.push({ actualSize, qty: row.balesQuantity || 0 });
+        entry.varianceBales.push({ id: rowId, actualSize, qty: row.balesQuantity || 0 });
       } else {
         entry.qty += row.balesQuantity || 0;
       }
@@ -178,13 +192,13 @@ export function useConsignmentData() {
   };
 
   /**
-   * Saves workspace logs locally for instant continuity (every change,
-   * un-debounced, so nothing is ever lost if the tab closes). The backend
-   * sync is debounced: it only fires ~900ms after edits stop, so typing a
-   * correction into an item code (e.g. "H" -> "HL" -> "HLM" -> ... ->
-   * "ISLAM TOP") sends ONE request with the final value instead of one
-   * request per keystroke — which is what was previously creating a new
-   * ProductItem document for every intermediate, half-typed itemCode.
+   * Saves workspace state locally only — instant, every change, so nothing
+   * is lost if the tab closes. This NO LONGER auto-syncs to the backend.
+   * Auto-sync was the root cause of two separate incidents: a mid-typing
+   * itemCode correction registering multiple partial ProductItem documents,
+   * and (via a since-fixed bug) a single price edit briefly overwriting
+   * every item's price before the next auto-save could catch it. Use
+   * commitWorkspaceToBackend below for an explicit, user-triggered save.
    */
   const saveWorkspaceData = (consignmentId, workspaceData) => {
     try {
@@ -192,38 +206,35 @@ export function useConsignmentData() {
     } catch (e) {
       console.error("Error saving workspace data locally:", e);
     }
+  };
 
-    if (syncTimers.current[consignmentId]) {
-      clearTimeout(syncTimers.current[consignmentId]);
+  /**
+   * Explicitly pushes the current workspace state to the backend. Call this
+   * from a deliberate user action (an "Update"/"Commit" button), never
+   * automatically from a change effect — that's the whole point of
+   * separating this from saveWorkspaceData above.
+   */
+  const commitWorkspaceToBackend = async (consignmentId, workspaceData) => {
+    const production_items = buildProductionItemsPayload(
+      workspaceData.productionList,
+      workspaceData.pricelist
+    );
+
+    if (production_items.length === 0) {
+      console.warn(
+        `Skipped backend commit for consignment ${consignmentId}: productionList was empty. ` +
+        `If this consignment should genuinely be empty, this needs a different, explicit path — not a silent skip.`
+      );
+      return { success: false, reason: 'empty' };
     }
 
-    syncTimers.current[consignmentId] = setTimeout(async () => {
-      try {
-        const production_items = buildProductionItemsPayload(
-          workspaceData.productionList,
-          workspaceData.pricelist
-        );
-
-        // Safety guard: never let an empty productionList silently overwrite
-        // previously-saved production data. This is exactly what wiped
-        // ERIC-BUNDLE-08-2026's production_items to [] — the Command Center
-        // mounted with blank state (after a localStorage.clear()) and
-        // auto-saved that blank state as a full overwrite before this guard
-        // existed. If a consignment should genuinely become empty, that
-        // needs to go through an explicit action, not an incidental mount.
-        if (production_items.length === 0) {
-          console.warn(
-            `Skipped backend sync for consignment ${consignmentId}: productionList was empty. ` +
-            `This is either a genuinely new/empty consignment, or a stale blank mount — not synced either way, to avoid overwriting real data.`
-          );
-          return;
-        }
-
-        await apiClient.put(`/consignments/${consignmentId}/production`, { production_items });
-      } catch (e) {
-        console.error("Failed to sync production data to backend:", e.response?.data || e.message);
-      }
-    }, 900);
+    try {
+      await apiClient.put(`/consignments/${consignmentId}/production`, { production_items });
+      return { success: true };
+    } catch (e) {
+      console.error("Failed to commit production data to backend:", e.response?.data || e.message);
+      return { success: false, reason: 'error', error: e };
+    }
   };
 
   return {
@@ -233,6 +244,7 @@ export function useConsignmentData() {
     error,
     refreshConsignments: fetchConsignments,
     getWorkspaceData,
-    saveWorkspaceData
+    saveWorkspaceData,
+    commitWorkspaceToBackend
   };
 }

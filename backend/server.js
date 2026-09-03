@@ -20,6 +20,7 @@ import expenseRoutes from './routes/expenseRoutes.js';
 import byproductRoutes from './routes/byproductRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import userRoutes from './routes/userRoutes.js';
+import auditLogRoutes from './routes/auditLogRoutes.js';
 
 
 const app = express();
@@ -46,6 +47,7 @@ app.use('/api/expenses', expenseRoutes);
 app.use('/api/byproducts', byproductRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/audit-logs', auditLogRoutes);
 
 
 // 2. Database Connection Handling Engine

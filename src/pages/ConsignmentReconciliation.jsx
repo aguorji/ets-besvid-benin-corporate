@@ -42,20 +42,33 @@ export default function ConsignmentReconciliation() {
     );
   }
 
-  // Formatting helper for Naira figures
-  const formatNaira = (val) => new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', minimumFractionDigits: 0 }).format(val || 0);
+  // Was hardcoded to Intl.NumberFormat('en-NG', ..., currency: 'NGN'), which
+  // always rendered Naira regardless of the currency chosen at intake.
+  // Plain symbol + grouped number works for ₦ / CFA / $ alike.
+  const formatNaira = (val) => `${currency}${Number(val || 0).toLocaleString()}`;
 
-  // Safe Property Fallbacks (Defensive mapping for camelCase vs snake_case)
-  const consignmentRef = data.consignmentRef || data.consignment_ref || 'N/A';
-  const totalBaleRevenue = Number(data.totalBaleRevenue ?? data.total_bale_revenue ?? 0);
-  const byproductRevenue = Number(data.byproductRevenue ?? data.byproduct_revenue ?? 0);
-  const totalRevenue = Number(data.totalRevenue ?? data.total_revenue ?? 0);
-  const totalCost = Number(data.totalCost ?? data.total_landing_cost ?? data.total_cost ?? 0);
-  const totalExpenses = Number(data.totalExpenses ?? data.total_expenses ?? 0);
-  const stockValue = Number(data.stockValue ?? data.stock_value ?? 0);
-  const totalDebt = Number(data.totalDebt ?? data.total_debt ?? 0);
-  const netProfit = Number(data.netProfit ?? data.net_profit ?? 0);
-  const realCashPosition = Number(data.realCashPosition ?? data.real_cash_position ?? 0);
+  // The backend actually returns { manifest, financials, ledgers } — this
+  // was previously reading everything as if it were flat on `data` itself,
+  // so every field silently fell back to 0/N/A regardless of what the API
+  // returned, even once the routing itself was fixed.
+  const manifest = data.manifest || {};
+  const financials = data.financials || {};
+  const currency = manifest.currency || localStorage.getItem('dashboard_currency') || '₦';
+
+  const consignmentRef = manifest.consignment_ref || 'N/A';
+  const totalBaleRevenue = Number(financials.totalBaleRevenue ?? 0);
+  const byproductRevenue = Number(financials.byproductRevenue ?? 0);
+  const totalRevenue = Number(financials.totalRevenue ?? 0);
+  // totalCost is landing cost + expenses combined — baseLandingCost is
+  // shown separately below since that's specifically what's needed to
+  // compute the business position, not the combined figure.
+  const baseLandingCost = Number(manifest.total_landing_cost ?? 0);
+  const totalCost = Number(financials.totalCost ?? 0);
+  const totalExpenses = Number(financials.totalExpenses ?? 0);
+  const stockValue = Number(financials.stockValue ?? 0);
+  const totalDebt = Number(financials.totalDebt ?? 0);
+  const netProfit = Number(financials.netProfit ?? 0);
+  const realCashPosition = Number(financials.realCashPosition ?? 0);
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6 font-mono text-xs text-navy bg-off-white min-h-screen">
@@ -111,6 +124,10 @@ export default function ConsignmentReconciliation() {
               <Activity size={12} className="text-red-500" /> Outlay & Valuation
             </h4>
             <div className="space-y-2 mt-3">
+              <div className="flex justify-between text-gray-600">
+                <span>Base Landing Cost:</span>
+                <span className="font-bold">{formatNaira(baseLandingCost)}</span>
+              </div>
               <div className="flex justify-between text-gray-600">
                 <span>Total Cost Pool:</span>
                 <span className="font-bold text-red-600">{formatNaira(totalCost)}</span>

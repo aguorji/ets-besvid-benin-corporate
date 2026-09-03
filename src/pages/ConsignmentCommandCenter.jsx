@@ -1,4 +1,4 @@
-// src/components/ConsignmentCommandCenter.jsx
+// src/pages/ConsignmentCommandCenter.jsx
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   FileText, TrendingUp, ShoppingBag, Layers, 
@@ -13,7 +13,9 @@ import apiClient from '../api/client';
  * Handles production tracking, pricelist valuations, sales invoices with multi-consignment cross-stock checks,
  * immediate or partial bale/sack supply inputs, byproduct sales, expenses, and fulfillment status.
  */
-export default function ConsignmentCommandCenter({ consignment, currency, initialData, onSaveData, onBack, allConsignmentsData, onCrossConsignmentStockUpdate }) {
+export default function ConsignmentCommandCenter({ consignment, currency, initialData, onSaveData, onCommitData, onBack, allConsignmentsData, onCrossConsignmentStockUpdate, role = 'admin' }) {
+  const [commitStatus, setCommitStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
+  const [feedbackMsg, setFeedbackMsg] = useState(null); // { type: 'success'|'error', text: string }
   const isDirectCargo = consignment?.type !== 'Giant Bales';
   const unitLabel = (consignment?.type === 'Shoes' || consignment?.type === 'Bags') ? 'Sack' : 'Bale';
   
@@ -49,7 +51,21 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   // Alert notification state for out-of-stock items during invoice processing
   const [stockAlert, setStockAlert] = useState(null);
 
-  const [byproductForm, setByproductForm] = useState({ date: '', type: 'Loose Fiber', subType: 'Grade A', qty: '', price: '' });
+  // Live total across all line items — auto-fills Initial Amount Paid below
+  // so it never needs to be calculated by hand. For Part Payment, this
+  // still auto-fills as a correct starting point; the field stays editable
+  // so it can be reduced to whatever was actually received.
+  const invoiceTotal = useMemo(() => {
+    return invoiceItems.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.sellingPrice || 0)), 0);
+  }, [invoiceItems]);
+
+  useEffect(() => {
+    setInvoiceAmountPaid(invoiceTotal);
+  }, [invoiceTotal]);
+
+  const invoiceBalance = Math.max(0, invoiceTotal - Number(invoiceAmountPaid || 0));
+
+  const [byproductForm, setByproductForm] = useState({ date: new Date().toISOString().split('T')[0], type: 'Loose Fiber', subType: 'Grade A', qty: '', price: '' });
   const [expenseForm, setExpenseForm] = useState({ date: '', category: '', description: '', amount: '' });
 
   // Helper function to toggle packaging default standards
@@ -277,6 +293,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
         if (baseBalance > 0) {
           profiles.push({
             itemCode: p.item,
+            key: `${p.item}::${p.stdSize}::${refName}`,
             displayName: `${p.item} (${p.stdSize}) [Ref: ${refName}] - Bal: ${baseBalance}`,
             actualSize: p.stdSize,
             isVariance: false,
@@ -295,6 +312,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
             if (varBal > 0) {
               profiles.push({
                 itemCode: p.item,
+                key: `${p.item}::${v.actualSize}::${refName}`,
                 displayName: `${p.item} (${v.actualSize}) [Ref: ${refName}] - Bal: ${varBal}`,
                 actualSize: v.actualSize,
                 isVariance: true,
@@ -399,27 +417,22 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   const handleInvoiceItemChange = (index, field, value) => {
     const updated = [...invoiceItems];
     updated[index][field] = (field === 'qty' || field === 'sellingPrice' || field === 'delivered') ? Number(value) : value;
-    
-    if (field === 'itemCode' || field === 'selectedProfileKey') {
-      const selectedProfile = availableStockProfiles.find(p => p.displayName === value || p.itemCode === value || `${p.itemCode} (${p.actualSize})` === value);
+
+    if (field === 'selectedProfileKey') {
+      // Matching by the stable key here is deliberate — previously this
+      // matched by itemCode alone as a fallback whenever the exact display
+      // string didn't match, which silently picked whichever batch of that
+      // item happened to be listed first (usually the standard size),
+      // regardless of which specific batch was actually selected or
+      // whether it still had stock. A real <select> bound to a unique key
+      // makes that whole class of ambiguity impossible.
+      const selectedProfile = availableStockProfiles.find(p => p.key === value);
       if (selectedProfile) {
         updated[index].itemCode = selectedProfile.itemCode;
         updated[index].actualSize = selectedProfile.actualSize;
         updated[index].isVariance = selectedProfile.isVariance;
-        updated[index].selectedProfileKey = selectedProfile.displayName;
+        updated[index].selectedProfileKey = selectedProfile.key;
         updated[index].sourceConsignmentRef = selectedProfile.sourceConsignmentRef || consignment.consignmentRef;
-      } else {
-        const matchingProfiles = availableStockProfiles.filter(p => p.itemCode.toLowerCase() === value.toLowerCase());
-        if (matchingProfiles.length === 1) {
-          updated[index].itemCode = matchingProfiles[0].itemCode;
-          updated[index].actualSize = matchingProfiles[0].actualSize;
-          updated[index].sourceConsignmentRef = matchingProfiles[0].sourceConsignmentRef || consignment.consignmentRef;
-        } else {
-          updated[index].itemCode = value.toUpperCase();
-          if (!updated[index].sourceConsignmentRef) {
-            updated[index].sourceConsignmentRef = consignment.consignmentRef;
-          }
-        }
       }
     }
     setInvoiceItems(updated);
@@ -464,10 +477,11 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   };
 
   // Submit commercial invoice and run stock validation checks across consignments
-  const handleCreateInvoice = (e) => {
+  const handleCreateInvoice = async (e) => {
     e.preventDefault();
     if (!invoiceCustomer || invoiceItems.some(i => !i.itemCode || !i.qty)) return;
 
+    const stockChecks = [];
     for (const item of invoiceItems) {
       const reqQty = Number(item.qty);
       const stockCheck = checkAndResolveStockAvailability(item.itemCode, reqQty, item.actualSize);
@@ -476,81 +490,159 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
         setStockAlert(`⚠️ Alert: Item "${item.itemCode}" (${item.actualSize}) is NOT in stock in this consignment or any other available consignment!`);
         return;
       }
-
-      if (stockCheck.deductionType === 'cross') {
-        if (onCrossConsignmentStockUpdate) {
-          onCrossConsignmentStockUpdate(stockCheck.consignmentId, item.itemCode, item.actualSize, reqQty);
-        }
-        item.sourceConsignmentRef = stockCheck.sourceRef;
-      } else {
-        item.sourceConsignmentRef = consignment.consignmentRef;
-      }
-      
+      stockChecks.push(stockCheck);
       item.delivered = item.delivered !== '' && !isNaN(item.delivered) ? Number(item.delivered) : 0;
     }
 
     const totalInvoiceValue = invoiceItems.reduce((sum, item) => sum + (item.qty * item.sellingPrice), 0);
     const amountPaidVal = Number(invoiceAmountPaid || 0);
 
-    const newInvoice = {
-      id: Date.now().toString(),
-      customer: invoiceCustomer,
-      paymentType: invoicePaymentType,
-      amountPaid: amountPaidVal,
-      items: invoiceItems.map(item => {
-        const baseMatch = pricelist.find(p => p.item.toLowerCase() === item.itemCode.toLowerCase());
-        const basePrice = baseMatch ? baseMatch.stdPrice : 0;
-        const revenue = item.qty * item.sellingPrice;
-        const expectedRevenueAtBase = item.qty * basePrice;
-        
-        return {
-          ...item,
-          revenue,
-          variance: revenue - expectedRevenueAtBase,
-          performance: expectedRevenueAtBase > 0 ? (revenue / expectedRevenueAtBase) * 100 : 100,
-          basePrice
-        };
-      }),
-      total: totalInvoiceValue,
-      date: new Date().toLocaleDateString()
-    };
+    // This is now a real save, not a local-only action — previously
+    // handleCreateInvoice never called the backend at all, so every sale
+    // logged through this form lived only in localStorage and never reached
+    // MongoDB (which is why Financial Reconciliation has likely always
+    // looked thin, and why debt repayment had nothing real to act on).
+    setFeedbackMsg(null);
+    try {
+      const response = await apiClient.post(`/consignments/${consignment.id}/invoice`, {
+        customerName: invoiceCustomer,
+        paymentType: invoicePaymentType,
+        amountPaid: amountPaidVal,
+        items: invoiceItems.map(item => {
+          const baseMatch = pricelist.find(p => p.item.toLowerCase() === item.itemCode.toLowerCase());
+          return {
+            itemCode: item.itemCode,
+            // parseFloat strips the embedded unit suffix ("55KG" -> 55,
+            // "200PCS" -> 200) — Sale.js's actual_size field is a Number,
+            // and sending the raw string caused every sale to fail with
+            // "Cast to Number failed for value '55KG'".
+            actualSize: parseFloat(item.actualSize) || 0,
+            qty: item.qty,
+            sellingPrice: item.sellingPrice,
+            basePrice: baseMatch ? baseMatch.stdPrice : 0
+          };
+        })
+      });
+      const savedSale = response.data;
 
-    setSalesLog([...salesLog, newInvoice]);
-    setStockAlert(null);
-    setInvoiceCustomer('');
-    setInvoicePaymentType('Cash');
-    setInvoiceAmountPaid('');
-    setInvoiceItems([{ itemCode: '', actualSize: '', qty: '', sellingPrice: '', delivered: '', selectedProfileKey: '', sourceConsignmentRef: '' }]);
+      // Cross-consignment stock deduction and source attribution only
+      // happen now that the save is confirmed — never before, so local
+      // state can't drift ahead of what's actually in the database.
+      invoiceItems.forEach((item, idx) => {
+        const stockCheck = stockChecks[idx];
+        if (stockCheck.deductionType === 'cross' && onCrossConsignmentStockUpdate) {
+          onCrossConsignmentStockUpdate(stockCheck.consignmentId, item.itemCode, item.actualSize, Number(item.qty));
+        }
+        item.sourceConsignmentRef = stockCheck.deductionType === 'cross' ? stockCheck.sourceRef : consignment.consignmentRef;
+      });
+
+      const newInvoice = {
+        id: savedSale._id || Date.now().toString(),
+        backendId: savedSale._id,
+        customer: invoiceCustomer,
+        paymentType: invoicePaymentType,
+        amountPaid: savedSale.amount_paid ?? amountPaidVal,
+        items: invoiceItems.map(item => {
+          const baseMatch = pricelist.find(p => p.item.toLowerCase() === item.itemCode.toLowerCase());
+          const basePrice = baseMatch ? baseMatch.stdPrice : 0;
+          const revenue = item.qty * item.sellingPrice;
+          const expectedRevenueAtBase = item.qty * basePrice;
+
+          return {
+            ...item,
+            revenue,
+            variance: revenue - expectedRevenueAtBase,
+            performance: expectedRevenueAtBase > 0 ? (revenue / expectedRevenueAtBase) * 100 : 100,
+            basePrice
+          };
+        }),
+        total: savedSale.gross_revenue ?? totalInvoiceValue,
+        date: new Date().toLocaleDateString()
+      };
+
+      setSalesLog([...salesLog, newInvoice]);
+      setStockAlert(null);
+      setFeedbackMsg({ type: 'success', text: 'Invoice saved to the database.' });
+      setInvoiceCustomer('');
+      setInvoicePaymentType('Cash');
+      setInvoiceAmountPaid('');
+      setInvoiceItems([{ itemCode: '', actualSize: '', qty: '', sellingPrice: '', delivered: '', selectedProfileKey: '', sourceConsignmentRef: '' }]);
+    } catch (err) {
+      console.error('Failed to save invoice:', err.response?.data || err.message);
+      setFeedbackMsg({
+        type: 'error',
+        text: err.response?.data?.message || 'Failed to save invoice — nothing was recorded. Please try again.'
+      });
+    }
   };
 
-  const handleAddByproduct = (e) => {
+  const handleAddByproduct = async (e) => {
     e.preventDefault();
     if (!byproductForm.qty || !byproductForm.price) return;
-    const newSale = {
-      id: Date.now().toString(),
-      date: byproductForm.date || new Date().toISOString().split('T')[0],
-      type: byproductForm.type,
-      subType: byproductForm.subType || 'N/A',
-      qty: Number(byproductForm.qty),
-      price: Number(byproductForm.price),
-      revenue: Number(byproductForm.qty) * Number(byproductForm.price)
-    };
-    setByproductSales([...byproductSales, newSale]);
-    setByproductForm({ date: '', type: 'Loose Fiber', subType: 'Grade A', qty: '', price: '' });
+
+    setFeedbackMsg(null);
+    try {
+      const response = await apiClient.post(`/consignments/${consignment.id}/byproduct-sale`, {
+        date: byproductForm.date || new Date().toISOString().split('T')[0],
+        type: byproductForm.type,
+        subType: byproductForm.subType || 'N/A',
+        qty: Number(byproductForm.qty),
+        pricePerKg: Number(byproductForm.price)
+      });
+      const saved = response.data;
+
+      const newSale = {
+        id: saved._id || Date.now().toString(),
+        date: byproductForm.date || new Date().toISOString().split('T')[0],
+        type: byproductForm.type,
+        subType: byproductForm.subType || 'N/A',
+        qty: Number(byproductForm.qty),
+        price: Number(byproductForm.price),
+        revenue: saved.revenue ?? (Number(byproductForm.qty) * Number(byproductForm.price))
+      };
+      setByproductSales([...byproductSales, newSale]);
+      setFeedbackMsg({ type: 'success', text: 'Byproduct sale saved to the database.' });
+      setByproductForm({ date: new Date().toISOString().split('T')[0], type: 'Loose Fiber', subType: 'Grade A', qty: '', price: '' });
+    } catch (err) {
+      console.error('Failed to save byproduct sale:', err.response?.data || err.message);
+      setFeedbackMsg({
+        type: 'error',
+        text: err.response?.data?.message || 'Failed to save byproduct sale — nothing was recorded. Please try again.'
+      });
+    }
   };
 
-  const handleAddExpense = (e) => {
+  const handleAddExpense = async (e) => {
     e.preventDefault();
-    if (!expenseForm.amount) return;
-    const newExpense = {
-      id: Date.now().toString(),
-      date: expenseForm.date || new Date().toISOString().split('T')[0],
-      category: expenseForm.category || 'General Operations',
-      description: expenseForm.description || '',
-      amount: Number(expenseForm.amount)
-    };
-    setExpenses([...expenses, newExpense]);
-    setExpenseForm({ date: '', category: '', description: '', amount: '' });
+    if (!expenseForm.amount || !expenseForm.category) return;
+
+    setFeedbackMsg(null);
+    try {
+      const response = await apiClient.post(`/consignments/${consignment.id}/expense`, {
+        date: expenseForm.date || new Date().toISOString().split('T')[0],
+        category: expenseForm.category,
+        description: expenseForm.description || '',
+        amount: Number(expenseForm.amount)
+      });
+      const saved = response.data;
+
+      const newExpense = {
+        id: saved._id || Date.now().toString(),
+        date: expenseForm.date || new Date().toISOString().split('T')[0],
+        category: expenseForm.category,
+        description: expenseForm.description || '',
+        amount: Number(expenseForm.amount)
+      };
+      setExpenses([...expenses, newExpense]);
+      setFeedbackMsg({ type: 'success', text: 'Expense saved to the database.' });
+      setExpenseForm({ date: '', category: '', description: '', amount: '' });
+    } catch (err) {
+      console.error('Failed to save expense:', err.response?.data || err.message);
+      setFeedbackMsg({
+        type: 'error',
+        text: err.response?.data?.message || 'Failed to save expense — nothing was recorded. Please try again.'
+      });
+    }
   };
 
   const detailedSalesRows = useMemo(() => {
@@ -603,7 +695,15 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     const stockValue = grandTotalStockAssetValue;
     const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
     const estBaseLandingCost = Number(consignment?.total_landing_cost || consignment?.estBaseLandingCost || 0);
-    
+
+    // totalItemRevenue above counts the FULL invoice value even where a
+    // balance is still owing — that's correct for accrual accounting, but
+    // it means netProfit alone overstates actual cash on hand whenever
+    // there's outstanding debt. These two numbers separate the two views.
+    const totalOutstandingDebt = salesLog.reduce((sum, inv) => sum + Math.max(0, inv.total - inv.amountPaid), 0);
+    const totalCashReceived = salesLog.reduce((sum, inv) => sum + (inv.amountPaid || 0), 0);
+    const realCashPosition = (totalCashReceived + byproductRevenue) - (totalExpenses + estBaseLandingCost);
+
     return {
       totalItemRevenue,
       byproductRevenue,
@@ -612,11 +712,15 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
       totalExpenses,
       estBaseLandingCost,
       totalCost: totalExpenses + estBaseLandingCost,
-      netProfit: (totalRevenue + stockValue) - (totalExpenses + estBaseLandingCost)
+      netProfit: (totalRevenue + stockValue) - (totalExpenses + estBaseLandingCost),
+      totalOutstandingDebt,
+      totalCashReceived,
+      realCashPosition
     };
   }, [salesLog, byproductSales, grandTotalStockAssetValue, expenses, consignment]);
 
   // Production Ledger and Byproduct Sales tabs are now included for all consignments
+  const ADMIN_ONLY_TAB_IDS = ['debts', 'reconciliation'];
   const tabs = [
     { id: 'production', name: 'Production Ledger', icon: Layers },
     { id: 'pricelist', name: 'Pricelist Matrix', icon: TrendingUp },
@@ -626,7 +730,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     { id: 'stock', name: 'Live Stock Ledger', icon: FileText },
     { id: 'debts', name: 'Debt Tracking Analysis', icon: Users },
     { id: 'reconciliation', name: 'Financial Reconciliation', icon: Wallet },
-  ];
+  ].filter(tab => role === 'admin' || !ADMIN_ONLY_TAB_IDS.includes(tab.id));
 
   return (
     <div className="bg-slate-900 text-slate-100 min-h-screen p-6 font-sans">
@@ -644,8 +748,8 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
           </p>
         </div>
 
-        {/* Upload Manifest Packing List Button for Production Ledger - Active for all consignments */}
-        {activeTab === 'production' && (
+        {/* Upload Manifest Packing List Button for Production Ledger - admin only */}
+        {activeTab === 'production' && role === 'admin' && (
           <div className="flex items-center bg-slate-800 border border-slate-700 rounded-xl px-4 py-2 gap-3 shadow-md">
             <label className="text-xs text-slate-300 font-medium flex items-center gap-2 cursor-pointer hover:text-amber-400 transition">
               <Upload className="w-4 h-4 text-amber-500" />
@@ -655,11 +759,41 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
           </div>
         )}
 
-        <div className="bg-slate-800/80 border border-slate-700/60 rounded-xl px-4 py-2 text-right">
-          <div className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Base Landing Cost</div>
-          <div className="text-lg font-bold text-emerald-400">{currency}{reconciliationMetrics.estBaseLandingCost.toLocaleString()}</div>
+        <div className="flex items-center gap-3">
+          <div className="bg-slate-800/80 border border-slate-700/60 rounded-xl px-4 py-2 text-right">
+            <div className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Base Landing Cost</div>
+            <div className="text-lg font-bold text-emerald-400">{currency}{reconciliationMetrics.estBaseLandingCost.toLocaleString()}</div>
+          </div>
+
+          {/* Explicit save to the database. Edits below only update local
+              state/cache until this is clicked — nothing here reaches the
+              database automatically on every keystroke anymore. */}
+          <button
+            type="button"
+            disabled={commitStatus === 'saving'}
+            onClick={async () => {
+              if (!onCommitData) return;
+              setCommitStatus('saving');
+              const result = await onCommitData({ productionList, pricelist, salesLog, byproductSales, expenses });
+              setCommitStatus(result?.success ? 'saved' : 'error');
+              setTimeout(() => setCommitStatus('idle'), 2500);
+            }}
+            className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 disabled:cursor-not-allowed text-slate-950 font-bold text-xs uppercase tracking-wider px-4 py-2.5 rounded-xl transition cursor-pointer shadow-md"
+          >
+            {commitStatus === 'saving' ? 'Saving…' : commitStatus === 'saved' ? '✔ Saved' : commitStatus === 'error' ? '⚠ Save failed' : 'Update'}
+          </button>
         </div>
       </div>
+
+      {feedbackMsg && (
+        <div className={`mb-4 p-3 rounded-xl text-xs font-medium flex items-center gap-2 ${
+          feedbackMsg.type === 'success'
+            ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
+            : 'bg-rose-500/10 border border-rose-500/30 text-rose-400'
+        }`}>
+          {feedbackMsg.text}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
         <div className="xl:col-span-1 space-y-1.5">
@@ -688,36 +822,38 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                 <h2 className="text-xl font-semibold text-white">Production Tracking Log Run</h2>
                 <span className="text-xs text-slate-400 italic">💡 Entry adjustments automatically auto-calculate balances inside your ledger sheets</span>
               </div>
-              <form onSubmit={handleAddProduction} className="grid grid-cols-1 md:grid-cols-5 gap-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Item Description</label>
-                  <input type="text" required placeholder="LMD" value={prodForm.item} onChange={e => setProdForm({...prodForm, item: e.target.value.toUpperCase()})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-bold" />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Unit</label>
-                  <select value={prodForm.unit} onChange={e => handleUnitToggle(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white cursor-pointer">
-                    <option value="KGS per Bale">KGS per Bale</option>
-                    <option value="PCS per Bale">PCS per Bale</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Std Size</label>
-                  <input type="text" value={prodForm.stdSize} onChange={e => setProdForm({...prodForm, stdSize: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Quantity ({unitLabel}s)</label>
-                  <input type="number" required placeholder="0" value={prodForm.qty} onChange={e => setProdForm({...prodForm, qty: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Actual Output Size</label>
-                  <input type="text" value={prodForm.actualSize} onChange={e => setProdForm({...prodForm, actualSize: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
-                </div>
-                <div className="col-span-1 md:col-span-5 flex justify-end pt-2">
-                  <button type="submit" className="bg-amber-500 text-slate-900 font-bold text-xs rounded-xl px-5 py-2.5 hover:bg-amber-400 transition flex items-center gap-1 cursor-pointer">
-                    <Plus className="w-4 h-4" /> Add Item Record
-                  </button>
-                </div>
-              </form>
+              {role === 'admin' && (
+                <form onSubmit={handleAddProduction} className="grid grid-cols-1 md:grid-cols-5 gap-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Item Description</label>
+                    <input type="text" required placeholder="LMD" value={prodForm.item} onChange={e => setProdForm({...prodForm, item: e.target.value.toUpperCase()})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-bold" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Unit</label>
+                    <select value={prodForm.unit} onChange={e => handleUnitToggle(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white cursor-pointer">
+                      <option value="KGS per Bale">KGS per Bale</option>
+                      <option value="PCS per Bale">PCS per Bale</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Std Size</label>
+                    <input type="text" value={prodForm.stdSize} onChange={e => setProdForm({...prodForm, stdSize: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Quantity ({unitLabel}s)</label>
+                    <input type="number" required placeholder="0" value={prodForm.qty} onChange={e => setProdForm({...prodForm, qty: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Actual Output Size</label>
+                    <input type="text" value={prodForm.actualSize} onChange={e => setProdForm({...prodForm, actualSize: e.target.value})} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
+                  </div>
+                  <div className="col-span-1 md:col-span-5 flex justify-end pt-2">
+                    <button type="submit" className="bg-amber-500 text-slate-900 font-bold text-xs rounded-xl px-5 py-2.5 hover:bg-amber-400 transition flex items-center gap-1 cursor-pointer">
+                      <Plus className="w-4 h-4" /> Add Item Record
+                    </button>
+                  </div>
+                </form>
+              )}
 
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm border-collapse">
@@ -739,22 +875,22 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                       productionList.map((p) => (
                         <tr key={p.id} className="border-b border-slate-800 text-slate-200 hover:bg-slate-800/20">
                           <td className="py-2 px-1">
-                            <input type="text" value={p.item} onChange={(e) => handleInlineProductionEdit(p.id, 'item', e.target.value.toUpperCase())} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-2 py-1 text-sm text-white font-bold w-28 focus:outline-none" />
+                            <input type="text" disabled={role !== 'admin'} value={p.item} onChange={(e) => handleInlineProductionEdit(p.id, 'item', e.target.value.toUpperCase())} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-2 py-1 text-sm text-white font-bold w-28 focus:outline-none disabled:cursor-not-allowed disabled:opacity-70" />
                           </td>
                           <td className="py-2 px-1 text-xs">
-                            <select value={p.unit} onChange={(e) => handleInlineProductionEdit(p.id, 'unit', e.target.value)} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-1 py-1 text-slate-300 focus:outline-none cursor-pointer">
+                            <select disabled={role !== 'admin'} value={p.unit} onChange={(e) => handleInlineProductionEdit(p.id, 'unit', e.target.value)} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-1 py-1 text-slate-300 focus:outline-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-70">
                               <option value="KGS per Bale">KGS per Bale</option>
                               <option value="PCS per Bale">PCS per Bale</option>
                             </select>
                           </td>
                           <td className="py-2 px-1">
-                            <input type="text" value={p.stdSize} onChange={(e) => handleInlineProductionEdit(p.id, 'stdSize', e.target.value)} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-2 py-1 text-sm font-mono text-slate-300 w-20 focus:outline-none" />
+                            <input type="text" disabled={role !== 'admin'} value={p.stdSize} onChange={(e) => handleInlineProductionEdit(p.id, 'stdSize', e.target.value)} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-2 py-1 text-sm font-mono text-slate-300 w-20 focus:outline-none disabled:cursor-not-allowed disabled:opacity-70" />
                           </td>
                           <td className="py-2 px-1">
-                            <input type="number" value={p.qty} onChange={(e) => handleInlineProductionEdit(p.id, 'qty', Number(e.target.value))} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-2 py-1 text-sm font-black text-amber-500 w-20 focus:outline-none" />
+                            <input type="number" disabled={role !== 'admin'} value={p.qty} onChange={(e) => handleInlineProductionEdit(p.id, 'qty', Number(e.target.value))} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-2 py-1 text-sm font-black text-amber-500 w-20 focus:outline-none disabled:cursor-not-allowed disabled:opacity-70" />
                           </td>
                           <td className="py-2 px-1">
-                            <input type="text" value={p.actualSize} onChange={(e) => handleInlineProductionEdit(p.id, 'actualSize', e.target.value)} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-2 py-1 text-sm font-mono text-white w-24 focus:outline-none" />
+                            <input type="text" disabled={role !== 'admin'} value={p.actualSize} onChange={(e) => handleInlineProductionEdit(p.id, 'actualSize', e.target.value)} className="bg-transparent border border-transparent hover:border-slate-700 focus:bg-slate-900 focus:border-amber-500 rounded px-2 py-1 text-sm font-mono text-white w-24 focus:outline-none disabled:cursor-not-allowed disabled:opacity-70" />
                           </td>
                           <td className="py-3 px-2">
                             <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${p.isVariance ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
@@ -768,6 +904,17 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                       ))
                     )}
                   </tbody>
+                  {productionList.length > 0 && (
+                    <tfoot>
+                      <tr className="border-t-2 border-amber-500/40 text-slate-100 font-bold text-sm">
+                        <td className="py-3 px-2" colSpan="3">Total Quantity (Bales Produced)</td>
+                        <td className="py-3 px-2 text-amber-400">
+                          {productionList.reduce((sum, p) => sum + (Number(p.qty) || 0), 0)}
+                        </td>
+                        <td className="py-3 px-2" colSpan="3"></td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             </div>
@@ -797,7 +944,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                           <td className="py-3 px-2 font-bold text-white">{item.item}</td>
                           <td className="py-3 px-2 font-mono text-slate-400 text-xs">{item.stdSize}</td>
                           <td className="py-3 px-2">
-                            <input type="number" value={item.stdPrice || ''} onChange={e => handlePricelistChange(item.id, 'stdPrice', e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1 w-28 text-xs text-emerald-400 font-semibold focus:outline-none" />
+                            <input type="number" disabled={role !== 'admin'} value={item.stdPrice || ''} onChange={e => handlePricelistChange(item.id, 'stdPrice', e.target.value)} className="bg-slate-900 border border-slate-700 rounded px-2 py-1 w-28 text-xs text-emerald-400 font-semibold focus:outline-none disabled:cursor-not-allowed disabled:opacity-70" />
                           </td>
                           <td className="py-3 px-2 font-black text-slate-300">{item.qty}</td>
                           <td className="py-3 px-2 text-xs text-slate-400 italic max-w-xs truncate">{item.extraDisplay}</td>
@@ -831,14 +978,28 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                   <div>
                     <label className="block text-xs text-slate-400 mb-1">Payment Type Method</label>
                     <select value={invoicePaymentType} onChange={e => setInvoicePaymentType(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full focus:outline-none cursor-pointer">
-                      <option value="Cash">Cash / Immediate</option>
-                      <option value="Bank Transfer">Bank Wire Transfer</option>
-                      <option value="Credit Terms">Deferred Credit Account</option>
+                      <option value="Cash">Cash (Cash or Bank Transfer)</option>
+                      <option value="Part Payment">Part Payment</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1">Initial Amount Paid ({currency})</label>
-                    <input type="number" required placeholder="0.00" value={invoiceAmountPaid} onChange={e => setInvoiceAmountPaid(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-emerald-400 font-mono font-bold w-full focus:outline-none" />
+                    <label className="block text-xs text-slate-400 mb-1">
+                      Initial Amount Paid ({currency}) — Total: {currency}{invoiceTotal.toLocaleString()}
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      disabled={invoicePaymentType === 'Cash'}
+                      placeholder="0.00"
+                      value={invoiceAmountPaid}
+                      onChange={e => setInvoiceAmountPaid(e.target.value)}
+                      className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-emerald-400 font-mono font-bold w-full focus:outline-none disabled:opacity-70 disabled:cursor-not-allowed"
+                    />
+                    {invoicePaymentType === 'Part Payment' && (
+                      <p className="text-[11px] mt-1 font-semibold text-rose-400">
+                        Balance: {currency}{invoiceBalance.toLocaleString()}
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -848,22 +1009,19 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                     <div key={idx} className="flex flex-wrap items-center gap-2 bg-slate-900/60 p-3 rounded-lg border border-slate-800">
                       
                       <div className="flex flex-col grow">
-                        <input 
-                          type="text" 
-                          list={`stock-profiles-${idx}`} 
-                          required 
-                          placeholder="Select or type item code..." 
-                          value={line.itemCode || ''} 
-                          onChange={e => handleInvoiceItemChange(idx, 'itemCode', e.target.value.toUpperCase())} 
-                          className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white uppercase font-bold focus:outline-none" 
-                        />
-                        <datalist id={`stock-profiles-${idx}`}>
+                        <select
+                          required
+                          value={line.selectedProfileKey || ''}
+                          onChange={e => handleInvoiceItemChange(idx, 'selectedProfileKey', e.target.value)}
+                          className="bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-xs text-white font-bold focus:outline-none cursor-pointer"
+                        >
+                          <option value="" disabled>Select item & batch...</option>
                           {availableStockProfiles.map(p => (
-                            <option key={p.displayName} value={p.itemCode}>
+                            <option key={p.key} value={p.key}>
                               {p.displayName}
                             </option>
                           ))}
-                        </datalist>
+                        </select>
                       </div>
                       
                       <input type="text" disabled placeholder="Size" value={line.actualSize || ''} className="bg-slate-950 border border-slate-800 text-slate-400 rounded px-2 py-1.5 text-xs w-20 font-mono text-center" />
@@ -987,6 +1145,16 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                     </tr>
                   ))}
                 </tbody>
+                {byproductSales.length > 0 && (
+                  <tfoot>
+                    <tr className="border-t-2 border-amber-500/40 text-slate-100 font-bold text-sm">
+                      <td colSpan="5" className="py-3">Total Value Realised</td>
+                      <td className="text-right py-3 text-emerald-400 font-mono">
+                        {currency}{byproductSales.reduce((sum, s) => sum + (s.revenue || 0), 0).toLocaleString()}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
           )}
@@ -996,7 +1164,15 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
               <h2 className="text-xl font-semibold text-white">Yard Operational Expenses Ledger</h2>
               <form onSubmit={handleAddExpense} className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
                 <input type="date" required value={expenseForm.date} onChange={e => setExpenseForm({...expenseForm, date: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none" />
-                <input type="text" required placeholder="Category" value={expenseForm.category} onChange={e => setExpenseForm({...expenseForm, category: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none" />
+                <select required value={expenseForm.category} onChange={e => setExpenseForm({...expenseForm, category: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none cursor-pointer">
+                    <option value="" disabled>Select Category</option>
+                    <option value="Port logistics">Port logistics</option>
+                    <option value="Magazine Rent">Magazine Rent</option>
+                    <option value="Fuel & Transport">Fuel & Transport</option>
+                    <option value="Staff Wages">Staff Wages</option>
+                    <option value="Utilities">Utilities</option>
+                    <option value="Others">Others</option>
+                  </select>
                 <input type="text" required placeholder="Description" value={expenseForm.description} onChange={e => setExpenseForm({...expenseForm, description: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none" />
                 <div className="flex gap-2">
                   <input type="number" required placeholder="Amount" value={expenseForm.amount} onChange={e => setExpenseForm({...expenseForm, amount: e.target.value})} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none grow" />
@@ -1056,8 +1232,12 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                           </tr>
                         ))}
                         <tr className="bg-slate-900/80 border-t-2 border-slate-700 font-sans font-bold text-white">
-                          <td colSpan="6" className="py-4 px-2 text-right text-xs uppercase tracking-wider text-slate-400 font-semibold">
-                            Total Asset Stock Valuation:
+                          <td colSpan="4" className="py-4 px-2 text-right text-xs uppercase tracking-wider text-slate-400 font-semibold">
+                            Total Items Available:
+                          </td>
+                          <td></td>
+                          <td className="py-4 px-2 font-black text-emerald-400 font-mono">
+                            {liveStockLedger.reduce((sum, s) => sum + (s.balance || 0), 0)}
                           </td>
                           <td className="py-4 px-2 text-right text-base font-black text-amber-400 font-mono">
                             {currency}{grandTotalStockAssetValue.toLocaleString(undefined, {maximumFractionDigits: 2})}
@@ -1137,6 +1317,23 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                   <span className="text-xs text-slate-400 font-medium uppercase tracking-wider">Net Position Assessment Position Margin</span>
                   <p className={`text-2xl font-black ${reconciliationMetrics.netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                     {currency}{reconciliationMetrics.netProfit.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-slate-900/40 border border-rose-500/30 rounded-xl p-5 grid grid-cols-1 md:grid-cols-2 gap-4 divide-y md:divide-y-0 md:divide-x divide-slate-800">
+                <div className="space-y-1">
+                  <span className="text-xs text-rose-400 font-medium uppercase tracking-wider">Outstanding Customer Debt</span>
+                  <p className="text-2xl font-black text-rose-400">{currency}{reconciliationMetrics.totalOutstandingDebt.toLocaleString(undefined, {maximumFractionDigits: 2})}</p>
+                  <p className="text-[11px] text-slate-500">Unpaid balance across all invoices — see Debt Tracking Analysis for the breakdown.</p>
+                </div>
+                <div className="space-y-1 md:pl-6 pt-4 md:pt-0">
+                  <span className="text-xs text-slate-400 font-medium uppercase tracking-wider">Real Cash Position</span>
+                  <p className={`text-2xl font-black ${reconciliationMetrics.realCashPosition >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {currency}{reconciliationMetrics.realCashPosition.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Actual cash received minus costs — unlike Net Position above, this excludes revenue still sitting as unpaid debt.
                   </p>
                 </div>
               </div>

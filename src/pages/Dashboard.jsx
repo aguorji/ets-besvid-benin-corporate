@@ -1,5 +1,5 @@
 // src/pages/Dashboard.jsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Plus, Package, Globe, LogOut, UserPlus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import ConsignmentCommandCenter from './ConsignmentCommandCenter';
@@ -13,10 +13,16 @@ export default function Dashboard() {
   const { 
     consignments, 
     getWorkspaceData, 
-    saveWorkspaceData 
+    saveWorkspaceData,
+    commitWorkspaceToBackend
   } = useConsignmentData();
 
-  const [currency, setCurrency] = useState('₦');
+  const [currency, setCurrency] = useState(() => localStorage.getItem('dashboard_currency') || '₦');
+
+  useEffect(() => {
+    localStorage.setItem('dashboard_currency', currency);
+  }, [currency]);
+
   const [activeWorkspace, setActiveWorkspace] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGeneralStockOpen, setIsGeneralStockOpen] = useState(false);
@@ -49,7 +55,8 @@ export default function Dashboard() {
       total_volume_count: Number(formData.totalVolumeCount) || 0,
       totalVolumeCount: Number(formData.totalVolumeCount) || 0,
       total_gross_weight: Number(formData.totalGrossMassWeight) || 0,
-      totalGrossMassWeight: Number(formData.totalGrossMassWeight) || 0
+      totalGrossMassWeight: Number(formData.totalGrossMassWeight) || 0,
+      currency: currency
     };
 
     try {
@@ -85,9 +92,10 @@ export default function Dashboard() {
     return (
       <ConsignmentCommandCenter 
         consignment={activeWorkspace} 
-        currency={currency}
+        currency={activeWorkspace.raw?.currency || currency}
         initialData={getWorkspaceData(activeWorkspace.id, activeWorkspace.raw)}
         onSaveData={(updatedData) => saveWorkspaceData(activeWorkspace.id, updatedData)}
+        onCommitData={(updatedData) => commitWorkspaceToBackend(activeWorkspace.id, updatedData)}
         onBack={() => setActiveWorkspace(null)} 
       />
     );

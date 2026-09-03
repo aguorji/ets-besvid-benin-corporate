@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import ProductItem from './ProductItem.js';
 
 const SaleItemSchema = new mongoose.Schema({
   // Connected directly to your product inventory variant layout (Optional for Byproducts)
@@ -116,26 +117,40 @@ const SaleSchema = new mongoose.Schema({
 
 
 // --- AUTOMATED ACCOUNTING ENGINE ---
-SaleSchema.pre('save', function(next) {
+SaleSchema.pre('save', async function(next) {
   let computedGross = 0;
-  const STANDARD_WEIGHT = 55; // Default baseline mass per standard bale (in KG)
 
-  this.items.forEach(item => {
-    // ⚖️ Weight Variance Engine: Evaluate deviation from target standard weights
-    const expectedStandardMass = item.quantity_sold * STANDARD_WEIGHT;
+  // Previously this hook assumed every item's standard bale weight was
+  // exactly 55kg. Real product data has standard sizes of 55, 60, 65, 80,
+  // and PCS-based items at 200-400 — any item that wasn't literally 55kg
+  // had its revenue and variance computed against the wrong baseline.
+  // Look up each item's actual standard size and unit instead.
+  const itemCodes = [...new Set(this.items.map(i => (i.item_name || '').toUpperCase().trim()).filter(Boolean))];
+  const products = await ProductItem.find({ itemCode: { $in: itemCodes } }).lean();
+  const productMap = new Map(products.map(p => [p.itemCode, p]));
 
-    if (item.actual_size && Number(item.actual_size) !== expectedStandardMass && item.set_price > 0) {
-      // Dynamic scaling for exact fractional or variable weight metrics
-      const effectivePricePerKg = item.selling_price / STANDARD_WEIGHT;
-      const effectiveTargetPricePerKg = item.set_price / STANDARD_WEIGHT;
-      
+  for (const item of this.items) {
+    const product = productMap.get((item.item_name || '').toUpperCase().trim());
+    const standardWeight = product?.standardSize || 55; // fall back to 55 only if the item genuinely isn't in the catalog
+    const isWeightBased = (product?.unit || 'KGS') === 'KGS';
+
+    const expectedStandardMass = item.quantity_sold * standardWeight;
+
+    // The weight-variance math only makes sense for KGS-based bales, where
+    // "actual weight differs from standard weight" is a meaningful concept.
+    // For PCS-based items (counted pieces, not weighed), it was previously
+    // being applied anyway, mixing unrelated units together.
+    if (isWeightBased && item.actual_size && Number(item.actual_size) !== expectedStandardMass && item.set_price > 0) {
+      const effectivePricePerKg = item.selling_price / standardWeight;
+      const effectiveTargetPricePerKg = item.set_price / standardWeight;
+
       const rawRevenue = Number(item.actual_size) * effectivePricePerKg;
       const rawVariance = (effectivePricePerKg - effectiveTargetPricePerKg) * Number(item.actual_size);
 
       item.revenue = Math.round(rawRevenue * 100) / 100;
       item.variance = Math.round(rawVariance * 100) / 100;
     } else {
-      // Clean processing rules for standard items and byproducts
+      // Clean processing rules for standard items, PCS-based items, and byproducts
       item.revenue = item.quantity_sold * item.selling_price;
       item.variance = (item.selling_price - (item.set_price || item.selling_price)) * item.quantity_sold;
     }
@@ -146,7 +161,7 @@ SaleSchema.pre('save', function(next) {
     else item.performance = 'Below Target';
 
     computedGross += item.revenue;
-  });
+  }
 
   // Consolidate final document summary fields
   this.gross_revenue = Math.round(computedGross * 100) / 100;

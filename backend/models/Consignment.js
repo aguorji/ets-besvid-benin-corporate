@@ -20,6 +20,16 @@ const ConsignmentSchema = new mongoose.Schema({
   // Root-level landing cost field
   total_landing_cost: { type: Number, default: 0 },
 
+  // Fields sent by Dashboard.jsx's "New Intake Registration" form. These
+  // were previously absent from the schema entirely, so Mongoose silently
+  // dropped them on every save regardless of what the frontend sent.
+  vessel_identity: { type: String, default: '' },
+  total_volume_count: { type: Number, default: 0 },
+  total_gross_weight: { type: Number, default: 0 },
+  // Previously currency was only a page-level toggle in Dashboard.jsx,
+  // never saved — so it couldn't actually differ between consignments.
+  currency: { type: String, default: '₦' },
+
   // 1. FINANCIAL COST POOL (Capital Outlays)
   cost_pool: {
     base_purchase_cost: { type: Number, default: 0 },

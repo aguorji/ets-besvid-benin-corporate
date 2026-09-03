@@ -33,6 +33,7 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
       const salesLog = workspace.salesLog || [];
       const itemsInStock = [];
       let groupTotalValue = 0;
+      let groupTotalQty = 0;
 
       pricelist.forEach(p => {
         const stdWt = parseFloat(p.stdSize) || 1;
@@ -76,30 +77,45 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
             stockValue: netStockValue
           });
           groupTotalValue += netStockValue;
+          groupTotalQty += currentBalanceQty;
         }
       });
+
+      // Each consignment now carries its own currency (see Consignment
+      // schema) — use it here instead of assuming every group shares the
+      // single currency prop, which broke once consignments could genuinely
+      // differ (e.g. one in CFA, another in Naira).
+      const groupCurrency = consignment.raw?.currency || currency;
 
       // Include group only if it contains active stock items
       if (itemsInStock.length > 0) {
         groups.push({
           consignmentRef: consignment.consignmentRef,
           categoryType: consignment.type,
+          currency: groupCurrency,
           items: itemsInStock,
-          groupTotalValue: groupTotalValue
+          groupTotalValue: groupTotalValue,
+          groupTotalQty: groupTotalQty
         });
       }
     });
 
     return groups;
-  }, [sortedConsignments, getWorkspaceData]);
+  }, [sortedConsignments, getWorkspaceData, currency]);
 
-  // Grand total value of all stocks across all tracked consignments
-  const grandTotalStockValue = useMemo(() => {
-    let total = 0;
+  // Grand totals split by currency — a single combined number would be
+  // meaningless (or actively misleading) once different consignments use
+  // different currencies.
+  const grandTotalsByCurrency = useMemo(() => {
+    const totals = {};
     consignmentStockGroups.forEach(group => {
-      total += group.groupTotalValue;
+      if (!totals[group.currency]) {
+        totals[group.currency] = { value: 0, qty: 0 };
+      }
+      totals[group.currency].value += group.groupTotalValue;
+      totals[group.currency].qty += group.groupTotalQty;
     });
-    return total;
+    return totals;
   }, [consignmentStockGroups]);
 
   // Handle printing or exporting the inventory matrix as PDF
@@ -117,6 +133,7 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
       excelData.push({
         "Consignment Reference": group.consignmentRef,
         "Category": group.categoryType,
+        "Currency": group.currency,
         "Item Description": "",
         "Size Base": "",
         "In-Stock Qty": "",
@@ -129,6 +146,7 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
         excelData.push({
           "Consignment Reference": "",
           "Category": "",
+          "Currency": "",
           "Item Description": item.item,
           "Size Base": item.stdSize,
           "In-Stock Qty": item.qty,
@@ -141,9 +159,10 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
       excelData.push({
         "Consignment Reference": `Subtotal for ${group.consignmentRef}`,
         "Category": "",
+        "Currency": group.currency,
         "Item Description": "",
         "Size Base": "",
-        "In-Stock Qty": "",
+        "In-Stock Qty": group.groupTotalQty,
         "Unit Price": "",
         "Net Stock Value": group.groupTotalValue
       });
@@ -152,15 +171,19 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
       excelData.push({});
     });
 
-    // Add Grand Total row at the very bottom
-    excelData.push({
-      "Consignment Reference": "GENERAL TOTAL STOCK VALUE",
-      "Category": "",
-      "Item Description": "",
-      "Size Base": "",
-      "In-Stock Qty": "",
-      "Unit Price": "",
-      "Net Stock Value": grandTotalStockValue
+    // Grand total row per currency — a single combined total across
+    // different currencies would misrepresent the actual position.
+    Object.entries(grandTotalsByCurrency).forEach(([curr, totals]) => {
+      excelData.push({
+        "Consignment Reference": `GENERAL TOTAL STOCK VALUE (${curr})`,
+        "Category": "",
+        "Currency": curr,
+        "Item Description": "",
+        "Size Base": "",
+        "In-Stock Qty": totals.qty,
+        "Unit Price": "",
+        "Net Stock Value": totals.value
+      });
     });
 
     // Create worksheet and workbook structure
@@ -245,8 +268,8 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
                         <th className="py-2.5 px-4 font-medium">Item Description</th>
                         <th className="py-2.5 px-4 font-medium">Size Base</th>
                         <th className="py-2.5 px-4 font-medium">In-Stock Qty</th>
-                        <th className="py-2.5 px-4 font-medium">Unit Price ({currency})</th>
-                        <th className="py-2.5 px-4 font-medium text-right">Net Stock Value ({currency})</th>
+                        <th className="py-2.5 px-4 font-medium">Unit Price ({group.currency})</th>
+                        <th className="py-2.5 px-4 font-medium text-right">Net Stock Value ({group.currency})</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-850 font-mono">
@@ -255,8 +278,8 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
                           <td className="py-2.5 px-4 font-sans font-bold text-white">{item.item}</td>
                           <td className="py-2.5 px-4 text-slate-400">{item.stdSize}</td>
                           <td className="py-2.5 px-4 font-bold text-emerald-400">{item.qty}</td>
-                          <td className="py-2.5 px-4">{currency}{item.unitPrice.toLocaleString()}</td>
-                          <td className="py-2.5 px-4 text-right font-bold text-white">{currency}{item.stockValue.toLocaleString()}</td>
+                          <td className="py-2.5 px-4">{group.currency}{item.unitPrice.toLocaleString()}</td>
+                          <td className="py-2.5 px-4 text-right font-bold text-white">{group.currency}{item.stockValue.toLocaleString()}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -264,12 +287,15 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
                 </div>
 
                 {/* Consignment Subtotal Footer Bar */}
-                <div className="bg-slate-900/80 px-4 py-2.5 border-t border-slate-800 flex justify-between items-center text-xs">
+                <div className="bg-slate-900/80 px-4 py-2.5 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-1 text-xs">
+                  <span className="text-slate-400 font-medium">
+                    Total In-Stock Qty for <strong className="text-amber-400">{group.consignmentRef}</strong>: <strong className="text-emerald-400">{group.groupTotalQty}</strong>
+                  </span>
                   <span className="text-slate-400 font-medium">
                     Total Value for <strong className="text-amber-400">{group.consignmentRef}</strong>:
                   </span>
                   <span className="font-bold text-emerald-400 font-mono text-sm">
-                    {currency}{group.groupTotalValue.toLocaleString()}
+                    {group.currency}{group.groupTotalValue.toLocaleString()}
                   </span>
                 </div>
 
@@ -278,16 +304,24 @@ export default function GeneralStockModal({ isOpen, onClose, consignments, getWo
           )}
         </div>
 
-        {/* Modal Footer: Grand Total / General Stock Valuation */}
-        <div className="flex flex-col sm:flex-row justify-between items-center px-6 py-4 border-t border-slate-800 bg-slate-850 gap-2">
+        {/* Modal Footer: Grand Totals, split by currency — combining
+            different currencies into one number would be meaningless. */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center px-6 py-4 border-t border-slate-800 bg-slate-850 gap-3">
           <span className="text-xs text-slate-400 font-medium">
             Total Active Consignment Groups Tracked: <strong className="text-white">{consignmentStockGroups.length}</strong>
           </span>
-          <div className="text-right">
-            <span className="text-xs text-slate-400 mr-2 font-semibold uppercase tracking-wider text-amber-500">General Total Stock Value:</span>
-            <span className="text-base font-bold text-emerald-400 font-mono">
-              {currency}{grandTotalStockValue.toLocaleString()}
-            </span>
+          <div className="text-right space-y-1">
+            {Object.entries(grandTotalsByCurrency).map(([curr, totals]) => (
+              <div key={curr}>
+                <span className="text-xs text-slate-400 mr-2 font-semibold uppercase tracking-wider text-amber-500">
+                  Total Stock Value ({curr}):
+                </span>
+                <span className="text-base font-bold text-emerald-400 font-mono">
+                  {curr}{totals.value.toLocaleString()}
+                </span>
+                <span className="text-[10px] text-slate-500 ml-2">({totals.qty} units)</span>
+              </div>
+            ))}
           </div>
         </div>
 

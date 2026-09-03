@@ -1,6 +1,13 @@
 import mongoose from 'mongoose';
 
 const ByproductSchema = new mongoose.Schema({
+  // Same gap as Expense.js — this link never existed, so byproduct sales
+  // could never be correctly attributed back to their consignment.
+  consignment_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Consignment',
+    required: true
+  },
   date: { type: Date, default: Date.now },
   type: { type: String, required: true, default: 'Rags' },
   sub_type: String,

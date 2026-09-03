@@ -1,11 +1,11 @@
 import express from 'express';
 import { logByproductSale, getByproductLedger } from '../controllers/byproductController.js';
-import { protectGate } from '../middleware/authSecurity.js';
+import { protectRoute } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
 router.route('/')
-  .post(protectGate, logByproductSale)
-  .get(protectGate, getByproductLedger);
+  .post(protectRoute, logByproductSale)
+  .get(protectRoute, getByproductLedger);
 
 export default router;

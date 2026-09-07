@@ -128,31 +128,22 @@ export function useConsignmentData() {
   };
 
   /**
-   * Retrieves specific workspace production/sales logs. Local storage is
-   * checked first as an instant-restore cache; if it's empty (cleared,
-   * different browser/device, etc.), this falls back to reconstructing the
-   * ledger from the consignment's real, saved production_items instead of
-   * returning blank. Pass the consignment's raw backend record (from
-   * useConsignmentData's `raw` field) as the second argument to enable the
-   * fallback.
+   * Retrieves the current production/pricelist data for a consignment.
+   *
+   * Previously this checked local storage FIRST and only fell back to the
+   * backend if the cache was empty — meaning once a browser cached a
+   * consignment even once, it would keep showing that same snapshot
+   * forever, never re-checking whether the backend had moved on. That's
+   * exactly why price updates made by admin (then committed via the
+   * "Update" button) never appeared in staff's already-cached view: staff's
+   * browser had no way to know a different session had updated anything.
+   *
+   * Now the backend's committed data (rawConsignment.production_items) is
+   * always preferred when it exists — that's the real, shared source of
+   * truth for a multi-user app. Local storage is only a fallback for the
+   * rare case where the backend genuinely has nothing yet.
    */
   const getWorkspaceData = (consignmentId, rawConsignment) => {
-    let cached = null;
-    try {
-      const data = localStorage.getItem(`workspace_${consignmentId}`);
-      if (data) cached = JSON.parse(data);
-    } catch (e) {
-      console.error("Error reading workspace data:", e);
-    }
-
-    // A cached object with an empty productionList isn't useful data — it's
-    // most likely what got auto-saved by ConsignmentCommandCenter's mount
-    // effect right after a localStorage.clear(), before this rebuild
-    // existed. Treat it the same as "nothing cached" so the rebuild below
-    // actually runs instead of returning that empty snapshot forever.
-    const cachedHasData = cached && Array.isArray(cached.productionList) && cached.productionList.length > 0;
-    if (cachedHasData) return cached;
-
     if (rawConsignment?.production_items?.length) {
       const rebuilt = rebuildWorkspaceFromProductionItems(rawConsignment.production_items);
       try {
@@ -163,9 +154,17 @@ export function useConsignmentData() {
       return rebuilt;
     }
 
-    // Nothing cached, and the backend genuinely has nothing either — this is
-    // a real empty consignment, not a stale-cache situation.
-    return cached || {};
+    // Backend has nothing for this consignment yet — fall back to local
+    // cache (e.g. a genuinely new consignment whose data hasn't been
+    // committed via Update yet, or a rare offline scenario).
+    try {
+      const data = localStorage.getItem(`workspace_${consignmentId}`);
+      if (data) return JSON.parse(data);
+    } catch (e) {
+      console.error("Error reading workspace data:", e);
+    }
+
+    return {};
   };
 
   /**
@@ -237,6 +236,34 @@ export function useConsignmentData() {
     }
   };
 
+  /**
+   * When a sale is fulfilled from a DIFFERENT consignment's stock (the item
+   * was out of stock in the consignment currently open, but available
+   * elsewhere), this records a zero-revenue entry against that OTHER
+   * consignment's own salesLog — so its balance math correctly reflects the
+   * depletion, without double-counting revenue (the real revenue is already
+   * recorded on the invoice under the consignment actually being viewed).
+   * This restores behavior the old standalone StaffTerminal.jsx had, which
+   * was otherwise silently dropped when it was consolidated to share
+   * ConsignmentCommandCenter with Dashboard.jsx — that component already
+   * supports this via its allConsignmentsData/onCrossConsignmentStockUpdate
+   * props, but nothing was actually calling them until now.
+   */
+  const handleCrossConsignmentStockUpdate = (otherConsignmentId, itemCode, actualSize, qtySold) => {
+    const otherData = getWorkspaceData(otherConsignmentId) || {};
+    const updatedSalesLog = [
+      ...(otherData.salesLog || []),
+      {
+        id: `cross-${Date.now()}`,
+        date: new Date().toLocaleDateString(),
+        customer: '(fulfilled via another consignment)',
+        items: [{ itemCode, actualSize, qty: qtySold, sellingPrice: 0, revenue: 0 }],
+        total: 0
+      }
+    ];
+    saveWorkspaceData(otherConsignmentId, { ...otherData, salesLog: updatedSalesLog });
+  };
+
   return {
     consignments,
     currency,
@@ -245,6 +272,7 @@ export function useConsignmentData() {
     refreshConsignments: fetchConsignments,
     getWorkspaceData,
     saveWorkspaceData,
-    commitWorkspaceToBackend
+    commitWorkspaceToBackend,
+    handleCrossConsignmentStockUpdate
   };
 }

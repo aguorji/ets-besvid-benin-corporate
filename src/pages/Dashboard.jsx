@@ -14,7 +14,8 @@ export default function Dashboard() {
     consignments, 
     getWorkspaceData, 
     saveWorkspaceData,
-    commitWorkspaceToBackend
+    commitWorkspaceToBackend,
+    handleCrossConsignmentStockUpdate
   } = useConsignmentData();
 
   const [currency, setCurrency] = useState(() => localStorage.getItem('dashboard_currency') || '₦');
@@ -96,6 +97,9 @@ export default function Dashboard() {
         initialData={getWorkspaceData(activeWorkspace.id, activeWorkspace.raw)}
         onSaveData={(updatedData) => saveWorkspaceData(activeWorkspace.id, updatedData)}
         onCommitData={(updatedData) => commitWorkspaceToBackend(activeWorkspace.id, updatedData)}
+        allConsignmentsData={consignments}
+        getWorkspaceData={getWorkspaceData}
+        onCrossConsignmentStockUpdate={handleCrossConsignmentStockUpdate}
         onBack={() => setActiveWorkspace(null)} 
       />
     );

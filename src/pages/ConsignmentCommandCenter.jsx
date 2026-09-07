@@ -1,4 +1,4 @@
-// src/pages/ConsignmentCommandCenter.jsx
+// src/components/ConsignmentCommandCenter.jsx
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   FileText, TrendingUp, ShoppingBag, Layers, 
@@ -13,7 +13,7 @@ import apiClient from '../api/client';
  * Handles production tracking, pricelist valuations, sales invoices with multi-consignment cross-stock checks,
  * immediate or partial bale/sack supply inputs, byproduct sales, expenses, and fulfillment status.
  */
-export default function ConsignmentCommandCenter({ consignment, currency, initialData, onSaveData, onCommitData, onBack, allConsignmentsData, onCrossConsignmentStockUpdate, role = 'admin' }) {
+export default function ConsignmentCommandCenter({ consignment, currency, initialData, onSaveData, onCommitData, onBack, allConsignmentsData, onCrossConsignmentStockUpdate, getWorkspaceData, role = 'admin' }) {
   const [commitStatus, setCommitStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
   const [feedbackMsg, setFeedbackMsg] = useState(null); // { type: 'success'|'error', text: string }
   const isDirectCargo = consignment?.type !== 'Giant Bales';
@@ -38,6 +38,72 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     onSaveData({ productionList, pricelist, salesLog, byproductSales, expenses });
   }, [productionList, pricelist, salesLog, byproductSales, expenses]);
 
+  // Fetch the REAL, current sales/expenses/byproducts from the database on
+  // open. Local cache was previously the only source for these, which
+  // meant admin and staff — separate browser sessions — never saw each
+  // other's sales at all. Production/pricelist intentionally stay on the
+  // explicit-Update-button design; these three already auto-save
+  // immediately on creation, so it's consistent for reads to always be
+  // live too, not cached.
+  useEffect(() => {
+    if (!consignment?.id) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const response = await apiClient.get(`/consignments/${consignment.id}/ledger`);
+        if (cancelled) return;
+        const { sales, expenses: fetchedExpenses, byproducts } = response.data;
+
+        setSalesLog(sales.map(s => ({
+          id: s._id,
+          backendId: s._id,
+          customer: s.customer_name,
+          paymentType: s.payment_type,
+          amountPaid: s.amount_paid,
+          total: s.gross_revenue,
+          date: new Date(s.date || s.createdAt).toLocaleDateString(),
+          items: (s.items || []).map(it => ({
+            itemCode: it.item_name,
+            actualSize: it.actual_size,
+            qty: it.quantity_sold,
+            sellingPrice: it.selling_price,
+            basePrice: it.set_price,
+            revenue: it.revenue,
+            variance: it.variance,
+            performance: it.performance,
+            // Backend doesn't track partial delivery separately from
+            // quantity sold yet — treated as fully supplied for now.
+            delivered: it.quantity_sold,
+            sourceConsignmentRef: consignment.consignmentRef
+          }))
+        })));
+
+        setExpenses(fetchedExpenses.map(e => ({
+          id: e._id,
+          date: new Date(e.date).toISOString().split('T')[0],
+          category: e.category,
+          description: e.description,
+          amount: e.amount
+        })));
+
+        setByproductSales(byproducts.map(b => ({
+          id: b._id,
+          date: new Date(b.date).toISOString().split('T')[0],
+          type: b.type,
+          subType: b.sub_type,
+          qty: b.quantity,
+          price: b.price_per_unit,
+          revenue: b.revenue
+        })));
+      } catch (err) {
+        console.error('Failed to fetch live sales/expenses/byproducts:', err.response?.data || err.message);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [consignment?.id]);
+
   // Sales Invoice creation form states
   const [invoiceCustomer, setInvoiceCustomer] = useState('');
   const [invoicePaymentType, setInvoicePaymentType] = useState('Cash'); 
@@ -60,8 +126,15 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   }, [invoiceItems]);
 
   useEffect(() => {
-    setInvoiceAmountPaid(invoiceTotal);
-  }, [invoiceTotal]);
+    if (invoicePaymentType === 'Credit') {
+      setInvoiceAmountPaid(0);
+    } else {
+      // Cash forces the full total (enforced via disabled input below);
+      // Part Payment defaults to the full total as a starting point, but
+      // stays editable so it can be reduced to what was actually received.
+      setInvoiceAmountPaid(invoiceTotal);
+    }
+  }, [invoiceTotal, invoicePaymentType]);
 
   const invoiceBalance = Math.max(0, invoiceTotal - Number(invoiceAmountPaid || 0));
 
@@ -147,6 +220,25 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   const handleExcelUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    // Previously this always appended onto whatever was already in
+    // productionList — uploading the same file twice (or uploading after
+    // manual entries already exist) silently doubled up quantities with no
+    // warning. This is very likely what produced 8 standard CR instead of
+    // the correct 6 (6 from parsing "7 (40)" correctly, plus 2 extra from
+    // an earlier action never getting cleared first).
+    if (productionList.length > 0) {
+      const proceed = window.confirm(
+        `This consignment already has ${productionList.length} production item row(s) logged. ` +
+        `Uploading this Excel file will ADD to them, not replace them — if you're re-uploading the ` +
+        `same or a corrected file, this will likely create duplicates.\n\n` +
+        `Click OK to add anyway, or Cancel to stop and clear/review existing rows first.`
+      );
+      if (!proceed) {
+        e.target.value = '';
+        return;
+      }
+    }
 
     const reader = new FileReader();
     reader.onload = (evt) => {
@@ -285,7 +377,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
       if (!pList) return;
       pList.forEach(p => {
         const totalStdSold = sLog ? sLog.reduce((sum, inv) => {
-          const matches = inv.items ? inv.items.filter(i => i.itemCode && i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === p.stdSize) : [];
+          const matches = inv.items ? inv.items.filter(i => i.itemCode && i.itemCode.toLowerCase() === p.item.toLowerCase() && parseFloat(i.actualSize) === parseFloat(p.stdSize)) : [];
           return sum + matches.reduce((acc, curr) => acc + (curr.qty || 0), 0);
         }, 0) : 0;
         const baseBalance = (p.qty || 0) - totalStdSold;
@@ -305,7 +397,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
         if (p.varianceBales && p.varianceBales.length > 0) {
           p.varianceBales.forEach(v => {
             const totalVarSold = sLog ? sLog.reduce((sum, inv) => {
-              const matches = inv.items ? inv.items.filter(i => i.itemCode && i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === v.actualSize) : [];
+              const matches = inv.items ? inv.items.filter(i => i.itemCode && i.itemCode.toLowerCase() === p.item.toLowerCase() && parseFloat(i.actualSize) === parseFloat(v.actualSize)) : [];
               return sum + matches.reduce((acc, curr) => acc + (curr.qty || 0), 0);
             }, 0) : 0;
             const varBal = (v.qty || 0) - totalVarSold;
@@ -328,16 +420,20 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     // 1. Current Consignment Stock
     extractProfiles(pricelist, salesLog, consignment?.consignmentRef);
 
-    // 2. All Other Consignments Stock
-    if (allConsignmentsData && allConsignmentsData.length > 0) {
+    // 2. All Other Consignments Stock — previously read otherC.pricelist/
+    // otherC.salesLog directly, but the normalized consignments list never
+    // carries those fields at all (they only exist via getWorkspaceData),
+    // so this always silently found nothing for every other consignment.
+    if (allConsignmentsData && allConsignmentsData.length > 0 && getWorkspaceData) {
       allConsignmentsData.forEach(otherC => {
         if (otherC.id === consignment?.id) return;
-        extractProfiles(otherC.pricelist || [], otherC.salesLog || [], otherC.consignmentRef);
+        const otherWs = getWorkspaceData(otherC.id, otherC.raw) || {};
+        extractProfiles(otherWs.pricelist || [], otherWs.salesLog || [], otherC.consignmentRef);
       });
     }
 
     return profiles;
-  }, [pricelist, salesLog, consignment, allConsignmentsData]);
+  }, [pricelist, salesLog, consignment, allConsignmentsData, getWorkspaceData]);
 
   // Compute pricing valuations for pricelist items
   const calculatedPricelistItems = useMemo(() => {
@@ -370,7 +466,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   const liveStockLedger = useMemo(() => {
     return calculatedPricelistItems.map(p => {
       const totalStdSold = salesLog.reduce((sum, inv) => {
-        const matches = inv.items.filter(i => i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === p.stdSize);
+        const matches = inv.items.filter(i => i.itemCode.toLowerCase() === p.item.toLowerCase() && parseFloat(i.actualSize) === parseFloat(p.stdSize));
         return sum + matches.reduce((acc, curr) => acc + curr.qty, 0);
       }, 0);
 
@@ -383,7 +479,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
       if (p.varianceBales && p.varianceBales.length > 0) {
         p.varianceBales.forEach(v => {
           const totalVarSold = salesLog.reduce((sum, inv) => {
-            const matches = inv.items.filter(i => i.itemCode.toLowerCase() === p.item.toLowerCase() && i.actualSize === v.actualSize);
+            const matches = inv.items.filter(i => i.itemCode.toLowerCase() === p.item.toLowerCase() && parseFloat(i.actualSize) === parseFloat(v.actualSize));
             return sum + matches.reduce((acc, curr) => acc + curr.qty, 0);
           }, 0);
 
@@ -441,32 +537,32 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
 
   // Cross-Consignment Stock Inspection Engine
   const checkAndResolveStockAvailability = (itemCode, requestedQty, size) => {
-    const currentStockItem = liveStockLedger.find(s => s.item.toLowerCase() === itemCode.toLowerCase() && s.actualSize === size);
-    if (currentStockItem && currentStockItem.balance >= requestedQty) {
+    // Reuses availableStockProfiles (already correctly per-size and
+    // cross-consignment-aware) instead of a separate parallel
+    // implementation — that duplication is exactly what let this silently
+    // fail for variance sizes (liveStockLedger collapses every size into
+    // one row keyed by the STANDARD size only) and for every other
+    // consignment (allConsignmentsData never carried pricelist/salesLog).
+    const matchingProfiles = availableStockProfiles.filter(
+      p => p.itemCode.toLowerCase() === itemCode.toLowerCase() && String(p.actualSize) === String(size)
+    );
+
+    const currentMatch = matchingProfiles.find(p => p.sourceConsignmentRef === consignment?.consignmentRef);
+    if (currentMatch && currentMatch.availableQty >= requestedQty) {
       return { found: true, sourceRef: consignment.consignmentRef, deductionType: 'current' };
     }
 
-    if (allConsignmentsData && allConsignmentsData.length > 0) {
-      for (const otherConsignment of allConsignmentsData) {
-        if (otherConsignment.id === consignment.id) continue;
-        
-        const otherWorkspace = allConsignmentsData.find(c => c.id === otherConsignment.id);
-        const otherPricelist = otherWorkspace?.pricelist || [];
-        const otherSalesLog = otherWorkspace?.salesLog || [];
-        
-        const foundMatch = otherPricelist.find(p => p.item.toLowerCase() === itemCode.toLowerCase());
-        if (foundMatch) {
-          const otherSold = otherSalesLog.reduce((sum, inv) => {
-            const matches = inv.items.filter(i => i.itemCode.toLowerCase() === itemCode.toLowerCase());
-            return sum + matches.reduce((acc, curr) => acc + curr.qty, 0);
-          }, 0);
-          const otherBalance = foundMatch.qty - otherSold;
-
-          if (otherBalance >= requestedQty) {
-            return { found: true, sourceRef: otherConsignment.consignmentRef, consignmentId: otherConsignment.id, deductionType: 'cross' };
-          }
-        }
-      }
+    const crossMatch = matchingProfiles.find(
+      p => p.sourceConsignmentRef !== consignment?.consignmentRef && p.availableQty >= requestedQty
+    );
+    if (crossMatch) {
+      const sourceConsignment = (allConsignmentsData || []).find(c => c.consignmentRef === crossMatch.sourceConsignmentRef);
+      return {
+        found: true,
+        sourceRef: crossMatch.sourceConsignmentRef,
+        consignmentId: sourceConsignment?.id,
+        deductionType: 'cross'
+      };
     }
 
     return { found: false };
@@ -980,6 +1076,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                     <select value={invoicePaymentType} onChange={e => setInvoicePaymentType(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-full focus:outline-none cursor-pointer">
                       <option value="Cash">Cash (Cash or Bank Transfer)</option>
                       <option value="Part Payment">Part Payment</option>
+                      <option value="Credit">Credit</option>
                     </select>
                   </div>
                   <div>
@@ -989,13 +1086,13 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                     <input
                       type="number"
                       required
-                      disabled={invoicePaymentType === 'Cash'}
+                      disabled={invoicePaymentType === 'Cash' || invoicePaymentType === 'Credit'}
                       placeholder="0.00"
                       value={invoiceAmountPaid}
                       onChange={e => setInvoiceAmountPaid(e.target.value)}
                       className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-emerald-400 font-mono font-bold w-full focus:outline-none disabled:opacity-70 disabled:cursor-not-allowed"
                     />
-                    {invoicePaymentType === 'Part Payment' && (
+                    {(invoicePaymentType === 'Part Payment' || invoicePaymentType === 'Credit') && (
                       <p className="text-[11px] mt-1 font-semibold text-rose-400">
                         Balance: {currency}{invoiceBalance.toLocaleString()}
                       </p>

@@ -26,9 +26,9 @@ router.use(protectRoute);
 // Writes an audit entry. Failures here are logged but never block or fail
 // the actual operation they're describing — an audit trail is a nice-to-have
 // record, not something that should be able to break a real transaction.
-async function logAudit({ operator_name, action_module, details, value_impact }) {
+async function logAudit({ operator_id, operator_name, action_module, details, value_impact }) {
   try {
-    await AuditLog.create({ operator_name, action_module, details, value_impact });
+    await AuditLog.create({ operator_id: operator_id || null, operator_name, action_module, details, value_impact });
   } catch (e) {
     console.error('Failed to write audit log entry:', e.message);
   }
@@ -191,7 +191,8 @@ router.post('/', adminOnly, async (req, res) => {
     await syncProductionToProducts(productionItems, consignmentRef, saved._id);
 
     await logAudit({
-      operator_name: req.body.vessel_identity || 'System',
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
       action_module: 'Consignment Intake',
       details: `New consignment registered: ${consignmentRef}`,
       value_impact: Number(req.body.total_landing_cost) || 0
@@ -335,7 +336,8 @@ router.put('/:id/production', async (req, res) => {
     await syncProductionToProducts(production_items, consignment.consignment_ref, consignment._id);
 
     await logAudit({
-      operator_name: 'System',
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
       action_module: 'Production Ledger',
       details: `Production items updated for ${consignment.consignment_ref}: ${production_items.length} row(s)`,
       value_impact: 0
@@ -404,6 +406,7 @@ router.post('/:id/invoice', async (req, res) => {
     }
 
     await logAudit({
+      operator_id: req.user._id,
       operator_name: req.user.name || req.user.email,
       action_module: 'Sales Ledger',
       details: `Invoice for ${newInvoice.customer_name}: ${newInvoice.items.length} item line(s)`,
@@ -435,6 +438,7 @@ router.post('/:id/byproduct-sale', async (req, res) => {
     await newSale.save();
 
     await logAudit({
+      operator_id: req.user._id,
       operator_name: req.user.name || req.user.email,
       action_module: 'Byproduct Sales',
       details: `${newSale.type} (${newSale.sub_type || 'N/A'}): ${newSale.quantity} units`,
@@ -448,6 +452,26 @@ router.post('/:id/byproduct-sale', async (req, res) => {
 });
 
 // POST: Add Operational Expense Manifest Layout Line
+// GET: Real, current sales/expenses/byproducts for a consignment — this is
+// the missing "read side" of the sync problem. Sales/expenses/byproducts
+// were already being saved correctly to the database, but nothing ever
+// fetched them back — each browser only ever saw what IT personally
+// created, since the frontend was reading from a local cache with no way
+// to know what happened in a different browser/session.
+router.get('/:id/ledger', async (req, res) => {
+  try {
+    const cId = new mongoose.Types.ObjectId(req.params.id);
+    const [sales, expenseDocs, byproductDocs] = await Promise.all([
+      Sale.find({ 'items.consignment_id': cId }).sort({ createdAt: 1 }),
+      Expense.find({ consignment_id: cId }).sort({ date: 1 }),
+      Byproduct.find({ consignment_id: cId }).sort({ date: 1 })
+    ]);
+    res.json({ sales, expenses: expenseDocs, byproducts: byproductDocs });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 router.post('/:id/expense', async (req, res) => {
   try {
     const cId = new mongoose.Types.ObjectId(req.params.id);
@@ -467,6 +491,7 @@ router.post('/:id/expense', async (req, res) => {
     await newExpense.save();
 
     await logAudit({
+      operator_id: req.user._id,
       operator_name: req.user.name || req.user.email,
       action_module: 'Operational Expenses',
       details: `${newExpense.category}: ${newExpense.description}`,
@@ -507,6 +532,7 @@ router.put('/:id/invoice/:invoiceId/repay', async (req, res) => {
     await target.save();
 
     await logAudit({
+      operator_id: req.user._id,
       operator_name: req.user.name || req.user.email,
       action_module: 'Debt Repayment',
       details: `Repayment for ${target.customer_name}'s invoice ${target._id}`,

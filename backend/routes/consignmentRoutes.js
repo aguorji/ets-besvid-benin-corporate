@@ -367,14 +367,20 @@ router.post('/:id/invoice', async (req, res) => {
       payment_type: req.body.paymentType || req.body.payment_type || 'Cash',
       amount_paid: Number(req.body.amountPaid ?? req.body.amount_paid) || 0,
       recorded_by: req.user._id,
-      items: rawItems.map(item => ({
-        consignment_id: cId,
-        item_name: item.itemCode || item.item_name,
-        actual_size: item.actualSize ?? item.actual_size,
-        quantity_sold: Number(item.qty ?? item.quantity_sold) || 1,
-        set_price: Number(item.basePrice ?? item.set_price) || 0,
-        selling_price: Number(item.sellingPrice ?? item.selling_price) || 0
-      }))
+      items: rawItems.map(item => {
+        const qtySold = Number(item.qty ?? item.quantity_sold) || 1;
+        return {
+          consignment_id: cId,
+          item_name: item.itemCode || item.item_name,
+          actual_size: item.actualSize ?? item.actual_size,
+          quantity_sold: qtySold,
+          // Defaults to fully delivered if not specified — matches prior
+          // behavior where "Bales Supplied" defaulted to the ordered qty.
+          quantity_delivered: item.delivered != null && item.delivered !== '' ? Number(item.delivered) : qtySold,
+          set_price: Number(item.basePrice ?? item.set_price) || 0,
+          selling_price: Number(item.sellingPrice ?? item.selling_price) || 0
+        };
+      })
     });
     await newInvoice.save();
 
@@ -540,6 +546,40 @@ router.put('/:id/invoice/:invoiceId/repay', async (req, res) => {
     });
 
     res.json({ message: 'Financial repayment ledger cleared.', target });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// PUT: Record additional physical delivery against an already-sold invoice
+// line item. Never touches stock — stock was already deducted when the
+// sale itself was recorded, since the goods are committed to this customer
+// from that moment. This purely tracks how much has actually been handed
+// over so far, separate from what's been paid.
+router.put('/:id/invoice/:invoiceId/supply', async (req, res) => {
+  try {
+    const target = await Sale.findById(req.params.invoiceId);
+    if (!target) return res.status(404).json({ message: 'Invoice record context vanished.' });
+
+    const { itemIndex, additionalQty } = req.body;
+    const item = target.items[itemIndex];
+    if (!item) return res.status(404).json({ message: 'Invoice line item not found.' });
+
+    const addQty = Number(additionalQty) || 0;
+    const newDelivered = Math.min(item.quantity_sold, (item.quantity_delivered || 0) + addQty);
+    item.quantity_delivered = newDelivered;
+
+    await target.save();
+
+    await logAudit({
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
+      action_module: 'Supply Fulfillment',
+      details: `${item.item_name} (${item.actual_size}) for ${target.customer_name}: +${addQty} supplied, now ${newDelivered}/${item.quantity_sold}`,
+      value_impact: 0
+    });
+
+    res.json({ message: 'Supply status updated.', target });
   } catch (err) {
     res.status(400).json({ message: err.message });
   }

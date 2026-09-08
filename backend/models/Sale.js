@@ -36,6 +36,17 @@ const SaleItemSchema = new mongoose.Schema({
     required: true, 
     default: 1 
   },
+  // Tracks how much has physically been handed to the customer, separate
+  // from quantity_sold (which is the commitment/payment quantity). A
+  // customer can pay in full for 10 bales while only 6 have been supplied
+  // so far — that's a fulfillment gap, not a stock or payment gap. Stock is
+  // already deducted at sale time (the goods are reserved for this
+  // customer the moment the sale is recorded), so updating this later does
+  // NOT touch stock again — it only tracks physical handover status.
+  quantity_delivered: {
+    type: Number,
+    default: 0
+  },
   set_price: { 
     type: Number, 
     required: false,

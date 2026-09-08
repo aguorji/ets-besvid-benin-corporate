@@ -16,6 +16,74 @@ import apiClient from '../api/client';
 export default function ConsignmentCommandCenter({ consignment, currency, initialData, onSaveData, onCommitData, onBack, allConsignmentsData, onCrossConsignmentStockUpdate, getWorkspaceData, role = 'admin' }) {
   const [commitStatus, setCommitStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
   const [feedbackMsg, setFeedbackMsg] = useState(null); // { type: 'success'|'error', text: string }
+
+  // Debt repayment inline form state
+  const [repayingInvoiceId, setRepayingInvoiceId] = useState(null);
+  const [repayAmount, setRepayAmount] = useState('');
+
+  // Supply/delivery update inline form state — keyed by `${invoiceId}-${itemIndex}`
+  const [supplyingRowKey, setSupplyingRowKey] = useState(null);
+  const [supplyAmount, setSupplyAmount] = useState('');
+
+  const handleRecordPayment = async (invoiceId) => {
+    const amount = Number(repayAmount);
+    if (!amount || amount <= 0) return;
+
+    setFeedbackMsg(null);
+    try {
+      const response = await apiClient.put(`/consignments/${consignment.id}/invoice/${invoiceId}/repay`, {
+        depositAmount: amount
+      });
+      const updatedSale = response.data.target;
+
+      setSalesLog(prev => prev.map(inv =>
+        (inv.backendId || inv.id) === invoiceId
+          ? { ...inv, amountPaid: updatedSale.amount_paid }
+          : inv
+      ));
+      setFeedbackMsg({ type: 'success', text: 'Payment recorded.' });
+      setRepayingInvoiceId(null);
+      setRepayAmount('');
+    } catch (err) {
+      console.error('Failed to record payment:', err.response?.data || err.message);
+      setFeedbackMsg({
+        type: 'error',
+        text: err.response?.data?.message || 'Failed to record payment — nothing was updated. Please try again.'
+      });
+    }
+  };
+
+  const handleRecordSupply = async (invoiceId, itemIndex) => {
+    const additionalQty = Number(supplyAmount);
+    if (!additionalQty || additionalQty <= 0) return;
+
+    setFeedbackMsg(null);
+    try {
+      const response = await apiClient.put(`/consignments/${consignment.id}/invoice/${invoiceId}/supply`, {
+        itemIndex,
+        additionalQty
+      });
+      const updatedSale = response.data.target;
+      const updatedItem = updatedSale.items[itemIndex];
+
+      setSalesLog(prev => prev.map(inv => {
+        if ((inv.backendId || inv.id) !== invoiceId) return inv;
+        const items = inv.items.map((it, idx) =>
+          idx === itemIndex ? { ...it, delivered: updatedItem.quantity_delivered } : it
+        );
+        return { ...inv, items };
+      }));
+      setFeedbackMsg({ type: 'success', text: 'Supply status updated.' });
+      setSupplyingRowKey(null);
+      setSupplyAmount('');
+    } catch (err) {
+      console.error('Failed to update supply status:', err.response?.data || err.message);
+      setFeedbackMsg({
+        type: 'error',
+        text: err.response?.data?.message || 'Failed to update supply status — nothing was recorded. Please try again.'
+      });
+    }
+  };
   const isDirectCargo = consignment?.type !== 'Giant Bales';
   const unitLabel = (consignment?.type === 'Shoes' || consignment?.type === 'Bags') ? 'Sack' : 'Bale';
   
@@ -72,9 +140,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
             revenue: it.revenue,
             variance: it.variance,
             performance: it.performance,
-            // Backend doesn't track partial delivery separately from
-            // quantity sold yet — treated as fully supplied for now.
-            delivered: it.quantity_sold,
+            delivered: it.quantity_delivered ?? it.quantity_sold,
             sourceConsignmentRef: consignment.consignmentRef
           }))
         })));
@@ -139,7 +205,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   const invoiceBalance = Math.max(0, invoiceTotal - Number(invoiceAmountPaid || 0));
 
   const [byproductForm, setByproductForm] = useState({ date: new Date().toISOString().split('T')[0], type: 'Loose Fiber', subType: 'Grade A', qty: '', price: '' });
-  const [expenseForm, setExpenseForm] = useState({ date: '', category: '', description: '', amount: '' });
+  const [expenseForm, setExpenseForm] = useState({ date: new Date().toISOString().split('T')[0], category: '', description: '', amount: '' });
 
   // Helper function to toggle packaging default standards
   const handleUnitToggle = (selectedUnit) => {
@@ -615,7 +681,8 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
             actualSize: parseFloat(item.actualSize) || 0,
             qty: item.qty,
             sellingPrice: item.sellingPrice,
-            basePrice: baseMatch ? baseMatch.stdPrice : 0
+            basePrice: baseMatch ? baseMatch.stdPrice : 0,
+            delivered: item.delivered
           };
         })
       });
@@ -731,7 +798,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
       };
       setExpenses([...expenses, newExpense]);
       setFeedbackMsg({ type: 'success', text: 'Expense saved to the database.' });
-      setExpenseForm({ date: '', category: '', description: '', amount: '' });
+      setExpenseForm({ date: new Date().toISOString().split('T')[0], category: '', description: '', amount: '' });
     } catch (err) {
       console.error('Failed to save expense:', err.response?.data || err.message);
       setFeedbackMsg({
@@ -745,11 +812,13 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     const entries = [];
     salesLog.forEach(inv => {
       const itemWeightFactor = inv.total > 0 ? inv.amountPaid / inv.total : 0;
-      inv.items.forEach(item => {
+      inv.items.forEach((item, itemIdx) => {
         const deliveredQty = item.delivered || 0;
         const pendingQty = Math.max(0, item.qty - deliveredQty);
         
         entries.push({
+          invoiceId: inv.backendId || inv.id,
+          itemIndex: itemIdx,
           date: inv.date,
           customer: inv.customer,
           paymentType: inv.paymentType,
@@ -816,7 +885,12 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   }, [salesLog, byproductSales, grandTotalStockAssetValue, expenses, consignment]);
 
   // Production Ledger and Byproduct Sales tabs are now included for all consignments
-  const ADMIN_ONLY_TAB_IDS = ['debts', 'reconciliation'];
+  // 'debts' moved out of admin-only: staff regularly collect debt payments
+  // from customers directly and need to be able to record them in real
+  // time. 'reconciliation' stays admin-only — it shows profit margins and
+  // overall business position, which is a different kind of sensitivity
+  // than "which customers owe money."
+  const ADMIN_ONLY_TAB_IDS = ['reconciliation'];
   const tabs = [
     { id: 'production', name: 'Production Ledger', icon: Layers },
     { id: 'pricelist', name: 'Pricelist Matrix', icon: TrendingUp },
@@ -1157,15 +1231,11 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                     <tr>
                       <th className="py-2.5 px-3">Date</th>
                       <th className="py-2.5 px-3">Item</th>
-                      <th className="py-2.5 px-3">Size</th>
-                      <th className="py-2.5 px-3">Qty Ordered</th>
-                      <th className="py-2.5 px-3 text-emerald-400">Supplied</th>
+                      <th className="py-2.5 px-3">Qty</th>
                       <th className="py-2.5 px-3">Price</th>
                       <th className="py-2.5 px-3">Revenue</th>
                       <th className="py-2.5 px-3">Customer</th>
-                      <th className="py-2.5 px-3 text-amber-400">Stock Source</th>
-                      <th className="py-2.5 px-3">Paid</th>
-                      <th className="py-2.5 px-3">Balance</th>
+                      <th className="py-2.5 px-3">Payment</th>
                       <th className="py-2.5 px-3 text-center">Supply Status</th>
                     </tr>
                   </thead>
@@ -1173,26 +1243,66 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                     {detailedSalesRows.map((row, index) => (
                       <tr key={index} className="hover:bg-slate-800/10 text-slate-300">
                         <td className="py-2.5 px-3 text-slate-500">{row.date}</td>
-                        <td className="py-2.5 px-3 font-sans font-bold text-white">{row.item}</td>
-                        <td className="py-2.5 px-3 text-slate-400 text-xs">{row.actualSize}</td>
-                        <td className="py-2.5 px-3 text-white font-bold">{row.qty}</td>
-                        <td className="py-2.5 px-3 text-emerald-400 font-bold">{row.delivered}</td>
+                        <td className="py-2.5 px-3 font-sans font-bold text-white">
+                          {row.item} <span className="text-slate-400 text-[10px] font-mono font-normal">({row.actualSize})</span>
+                          {row.sourceRef && row.sourceRef !== consignment.consignmentRef && (
+                            <div className="text-amber-400 text-[9px] font-sans font-medium mt-0.5">via {row.sourceRef}</div>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 font-bold">
+                          <span className={row.delivered < row.qty ? 'text-amber-400' : 'text-white'}>{row.delivered}</span>
+                          <span className="text-slate-500"> / {row.qty}</span>
+                        </td>
                         <td>{currency}{row.sellingPrice.toLocaleString()}</td>
                         <td className="text-emerald-400 font-bold">{currency}{row.revenue.toLocaleString()}</td>
                         <td className="font-sans font-semibold text-slate-200">{row.customer}</td>
-                        <td className="text-amber-400 font-sans font-medium text-[11px]">{row.sourceRef}</td>
-                        <td className="text-emerald-400">{currency}{row.amountPaid.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
-                        <td className="text-rose-400">{currency}{row.balance.toLocaleString(undefined, {maximumFractionDigits: 2})}</td>
+                        <td className="py-2.5 px-3">
+                          <div className="text-emerald-400 font-bold">{currency}{row.amountPaid.toLocaleString(undefined, {maximumFractionDigits: 2})}</div>
+                          {row.balance > 0.01 && (
+                            <div className="text-rose-400 text-[10px]">Bal: {currency}{row.balance.toLocaleString(undefined, {maximumFractionDigits: 2})}</div>
+                          )}
+                        </td>
                         
                         <td className="py-2.5 px-3 text-center">
                           {row.pending === 0 ? (
                             <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
                               <CheckCircle2 className="w-3 h-3" /> Supplied (Complete)
                             </span>
+                          ) : supplyingRowKey === `${row.invoiceId}-${row.itemIndex}` ? (
+                            <div className="flex items-center gap-1 justify-center">
+                              <input
+                                type="number"
+                                autoFocus
+                                min="1"
+                                max={row.pending}
+                                placeholder="Qty"
+                                value={supplyAmount}
+                                onChange={e => setSupplyAmount(e.target.value)}
+                                className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white w-16 focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleRecordSupply(row.invoiceId, row.itemIndex)}
+                                className="bg-emerald-500 text-slate-950 text-[10px] font-bold px-2 py-1 rounded cursor-pointer"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => { setSupplyingRowKey(null); setSupplyAmount(''); }}
+                                className="text-slate-400 text-[10px] px-1 cursor-pointer"
+                              >
+                                ✕
+                              </button>
+                            </div>
                           ) : (
-                            <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
-                              <AlertCircle className="w-3 h-3" /> Pending ({row.pending} {unitLabel})
-                            </span>
+                            <button
+                              type="button"
+                              onClick={() => { setSupplyingRowKey(`${row.invoiceId}-${row.itemIndex}`); setSupplyAmount(''); }}
+                              className="bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <AlertCircle className="w-3 h-3" /> Pending ({row.pending} {unitLabel}) — Mark Supplied
+                            </button>
                           )}
                         </td>
                       </tr>
@@ -1354,7 +1464,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
               <table className="w-full text-left text-sm border-collapse">
                 <thead>
                   <tr className="border-b border-slate-700 text-slate-400 text-xs">
-                    <th>Invoice Date</th><th>Customer</th><th>Invoice Value</th><th>Amount Paid</th><th className="text-right">Outstanding Debt</th>
+                    <th>Invoice Date</th><th>Customer</th><th>Invoice Value</th><th>Amount Paid</th><th>Outstanding Debt</th><th className="text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1364,7 +1474,45 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                       <td className="font-bold text-white">{debt.customer}</td>
                       <td className="font-mono">{currency}{debt.totalInvoice.toLocaleString()}</td>
                       <td className="font-mono text-emerald-400">{currency}{debt.amountPaid.toLocaleString()}</td>
-                      <td className="text-right font-black text-rose-400 font-mono">{currency}{debt.outstandingDebt.toLocaleString()}</td>
+                      <td className="font-black text-rose-400 font-mono">{currency}{debt.outstandingDebt.toLocaleString()}</td>
+                      <td className="text-right">
+                        {repayingInvoiceId === debt.id ? (
+                          <div className="flex items-center gap-1 justify-end">
+                            <input
+                              type="number"
+                              autoFocus
+                              min="1"
+                              max={debt.outstandingDebt}
+                              placeholder="Amount"
+                              value={repayAmount}
+                              onChange={e => setRepayAmount(e.target.value)}
+                              className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white w-24 focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRecordPayment(debt.id)}
+                              className="bg-emerald-500 text-slate-950 text-[10px] font-bold px-2 py-1 rounded cursor-pointer"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setRepayingInvoiceId(null); setRepayAmount(''); }}
+                              className="text-slate-400 text-[10px] px-1 cursor-pointer"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => { setRepayingInvoiceId(debt.id); setRepayAmount(''); }}
+                            className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-[10px] font-bold px-3 py-1.5 rounded-lg cursor-pointer"
+                          >
+                            Record Payment
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

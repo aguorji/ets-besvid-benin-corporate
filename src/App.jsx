@@ -12,10 +12,7 @@ import Team from './pages/Team';
 
 // Administrative & Protected Pages
 import Login from './pages/Login';
-import Consignments from './pages/Consignments';  
 import Dashboard from './pages/Dashboard';
-import PriceListManager from './pages/PriceListManager';
-import SalesLedger from './pages/SalesLedger';
 import ConsignmentReconciliation from './pages/ConsignmentReconciliation';
 import AuditLogs from './pages/AuditLogs';
 import StaffTerminal from './pages/StaffTerminal';
@@ -108,10 +105,15 @@ export default function App() {
             <Route path="/terminal" element={<StaffTerminal />} />
 
             {/* Shared Operational Views */}
-            <Route path="/consignments" element={<Consignments />} />
-            <Route path="/pricelist" element={<PriceListManager />} />
-            <Route path="/salesledger" element={<SalesLedger />} />
             <Route path="/consignment-reconciliation/:id" element={<ConsignmentReconciliation />} />
+            {/* Old standalone pages removed — Consignments.jsx, PriceListManager.jsx,
+                and SalesLedger.jsx were redundant with Dashboard/ConsignmentCommandCenter
+                and used raw fetch() calls that never attached the auth token, so they'd
+                now fail with 401 on every submit. Redirecting rather than leaving dead
+                links, in case anything still links to these paths. */}
+            <Route path="/consignments" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/pricelist" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/salesledger" element={<Navigate to="/dashboard" replace />} />
 
             {/* Admin Restricted Views */}
             <Route path="/users" element={<AdminOnlyRoute><UserManagement /></AdminOnlyRoute>} />

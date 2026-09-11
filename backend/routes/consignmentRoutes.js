@@ -467,12 +467,13 @@ router.post('/:id/byproduct-sale', async (req, res) => {
 router.get('/:id/ledger', async (req, res) => {
   try {
     const cId = new mongoose.Types.ObjectId(req.params.id);
-    const [sales, expenseDocs, byproductDocs] = await Promise.all([
-      Sale.find({ 'items.consignment_id': cId }).sort({ createdAt: 1 }),
+    const [sales, voidedSales, expenseDocs, byproductDocs] = await Promise.all([
+      Sale.find({ 'items.consignment_id': cId, status: 'active' }).sort({ createdAt: 1 }),
+      Sale.find({ 'items.consignment_id': cId, status: 'voided' }).sort({ voided_at: -1 }),
       Expense.find({ consignment_id: cId }).sort({ date: 1 }),
       Byproduct.find({ consignment_id: cId }).sort({ date: 1 })
     ]);
-    res.json({ sales, expenses: expenseDocs, byproducts: byproductDocs });
+    res.json({ sales, voidedSales, expenses: expenseDocs, byproducts: byproductDocs });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -580,6 +581,64 @@ router.put('/:id/invoice/:invoiceId/supply', async (req, res) => {
     });
 
     res.json({ message: 'Supply status updated.', target });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// PUT: Void a mistaken sale. Admin-only — this reverses a committed
+// transaction, a more sensitive action than recording a payment or a
+// delivery. Refuses to void anything already partially or fully delivered,
+// since a database can't undo goods that have physically left the yard —
+// that scenario needs a manual return/adjustment process, not an
+// automatic void. Releases the reserved stock back to available inventory
+// for whatever wasn't delivered, and never deletes the record — it stays
+// visible, marked voided, for the audit trail.
+router.put('/:id/invoice/:invoiceId/void', adminOnly, async (req, res) => {
+  try {
+    const target = await Sale.findById(req.params.invoiceId);
+    if (!target) return res.status(404).json({ message: 'Invoice record context vanished.' });
+    if (target.status === 'voided') {
+      return res.status(400).json({ message: 'This invoice has already been voided.' });
+    }
+
+    const alreadyDelivered = target.items.some(item => (item.quantity_delivered || 0) > 0);
+    if (alreadyDelivered) {
+      return res.status(400).json({
+        message: 'Cannot void — at least one item on this invoice has already been marked as supplied. Handle this as a manual return/adjustment instead.'
+      });
+    }
+
+    // Release reserved stock back to available inventory for every item
+    for (const item of target.items) {
+      const code = (item.item_name || '').toUpperCase().trim();
+      const product = await ProductItem.findOne({ itemCode: code });
+      if (!product) continue;
+
+      const variation = product.stock_variations.find(
+        v => item.actual_size != null && v.actual_size === Number(item.actual_size)
+      );
+      if (variation) {
+        variation.quantity_sold = Math.max(0, (variation.quantity_sold || 0) - item.quantity_sold);
+        await product.save();
+      }
+    }
+
+    target.status = 'voided';
+    target.voided_at = new Date();
+    target.voided_by = req.user._id;
+    target.void_reason = req.body.reason || '';
+    await target.save();
+
+    await logAudit({
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
+      action_module: 'Sale Voided',
+      details: `Invoice for ${target.customer_name} voided${req.body.reason ? `: ${req.body.reason}` : ''}`,
+      value_impact: -target.gross_revenue
+    });
+
+    res.json({ message: 'Invoice voided and stock released.', target });
   } catch (err) {
     res.status(400).json({ message: err.message });
   }

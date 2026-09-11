@@ -25,6 +25,34 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   const [supplyingRowKey, setSupplyingRowKey] = useState(null);
   const [supplyAmount, setSupplyAmount] = useState('');
 
+  // Void sale inline form state
+  const [voidingInvoiceId, setVoidingInvoiceId] = useState(null);
+  const [voidReason, setVoidReason] = useState('');
+
+  const handleVoidSale = async (invoiceId) => {
+    if (!voidReason.trim()) return;
+
+    setFeedbackMsg(null);
+    try {
+      await apiClient.put(`/consignments/${consignment.id}/invoice/${invoiceId}/void`, {
+        reason: voidReason.trim()
+      });
+
+      // Remove the voided invoice from the local view — matches the
+      // backend, which excludes voided sales from the active ledger.
+      setSalesLog(prev => prev.filter(inv => (inv.backendId || inv.id) !== invoiceId));
+      setFeedbackMsg({ type: 'success', text: 'Invoice voided and stock released.' });
+      setVoidingInvoiceId(null);
+      setVoidReason('');
+    } catch (err) {
+      console.error('Failed to void sale:', err.response?.data || err.message);
+      setFeedbackMsg({
+        type: 'error',
+        text: err.response?.data?.message || 'Failed to void sale. Please try again.'
+      });
+    }
+  };
+
   const handleRecordPayment = async (invoiceId) => {
     const amount = Number(repayAmount);
     if (!amount || amount <= 0) return;
@@ -1255,7 +1283,45 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                         </td>
                         <td>{currency}{row.sellingPrice.toLocaleString()}</td>
                         <td className="text-emerald-400 font-bold">{currency}{row.revenue.toLocaleString()}</td>
-                        <td className="font-sans font-semibold text-slate-200">{row.customer}</td>
+                        <td className="font-sans font-semibold text-slate-200">
+                          {row.customer}
+                          {role === 'admin' && (
+                            voidingInvoiceId === row.invoiceId ? (
+                              <div className="mt-1 flex items-center gap-1">
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  placeholder="Reason for voiding..."
+                                  value={voidReason}
+                                  onChange={e => setVoidReason(e.target.value)}
+                                  className="bg-slate-900 border border-rose-700 rounded px-2 py-1 text-[10px] text-white w-32 focus:outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleVoidSale(row.invoiceId)}
+                                  className="bg-rose-600 text-white text-[9px] font-bold px-2 py-1 rounded cursor-pointer"
+                                >
+                                  Confirm
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => { setVoidingInvoiceId(null); setVoidReason(''); }}
+                                  className="text-slate-400 text-[10px] px-1 cursor-pointer"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => { setVoidingInvoiceId(row.invoiceId); setVoidReason(''); }}
+                                className="block mt-0.5 text-rose-500 hover:text-rose-400 text-[9px] font-sans font-medium underline cursor-pointer"
+                              >
+                                Void Sale
+                              </button>
+                            )
+                          )}
+                        </td>
                         <td className="py-2.5 px-3">
                           <div className="text-emerald-400 font-bold">{currency}{row.amountPaid.toLocaleString(undefined, {maximumFractionDigits: 2})}</div>
                           {row.balance > 0.01 && (

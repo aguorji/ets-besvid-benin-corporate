@@ -122,7 +122,14 @@ const SaleSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User', 
     required: true 
-  }
+  },
+
+  // Voiding never deletes a sale — it marks it inactive so the audit trail
+  // stays intact, and excludes it from revenue/stock/debt calculations.
+  status: { type: String, enum: ['active', 'voided'], default: 'active' },
+  voided_at: { type: Date, default: null },
+  voided_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  void_reason: { type: String, default: '' }
 }, { timestamps: true });
 
 

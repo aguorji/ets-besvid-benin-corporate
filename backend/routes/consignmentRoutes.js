@@ -205,10 +205,19 @@ router.post('/', adminOnly, async (req, res) => {
 });
 
 // PUT: Standard Manifest Profile Update Route
-router.put('/:id', async (req, res) => {
+router.put('/:id', adminOnly, async (req, res) => {
   try {
     const updated = await Consignment.findByIdAndUpdate(req.params.id, req.body, { new: true });
     if (!updated) return res.status(404).json({ message: 'Manifest profile missing from data trees.' });
+
+    await logAudit({
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
+      action_module: 'Consignment Edit',
+      details: `Consignment metadata corrected for ${updated.consignment_ref}`,
+      value_impact: 0
+    });
+
     res.json(updated);
   } catch (err) {
     res.status(400).json({ message: err.message });
@@ -457,6 +466,60 @@ router.post('/:id/byproduct-sale', async (req, res) => {
   }
 });
 
+// PUT/DELETE: Correct or remove a mistaken byproduct sale entry. Admin-only
+// — same reasoning as void-sale: corrections need oversight, not
+// unrestricted self-editing.
+router.put('/:id/byproduct-sale/:byproductId', adminOnly, async (req, res) => {
+  try {
+    const record = await Byproduct.findById(req.params.byproductId);
+    if (!record) return res.status(404).json({ message: 'Byproduct sale record not found.' });
+
+    if (req.body.date !== undefined) record.date = req.body.date;
+    if (req.body.type !== undefined) record.type = req.body.type;
+    if (req.body.subType !== undefined || req.body.sub_type !== undefined) {
+      record.sub_type = req.body.subType ?? req.body.sub_type;
+    }
+    if (req.body.qty !== undefined || req.body.quantity !== undefined) {
+      record.quantity = Number(req.body.qty ?? req.body.quantity) || 0;
+    }
+    if (req.body.pricePerKg !== undefined || req.body.price_per_unit !== undefined) {
+      record.price_per_unit = Number(req.body.pricePerKg ?? req.body.price_per_unit) || 0;
+    }
+    await record.save(); // revenue recalculated by the schema's own pre('save') hook
+
+    await logAudit({
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
+      action_module: 'Byproduct Sale Corrected',
+      details: `${record.type} (${record.sub_type || 'N/A'}) entry edited`,
+      value_impact: 0
+    });
+
+    res.json(record);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+router.delete('/:id/byproduct-sale/:byproductId', adminOnly, async (req, res) => {
+  try {
+    const record = await Byproduct.findByIdAndDelete(req.params.byproductId);
+    if (!record) return res.status(404).json({ message: 'Byproduct sale record not found.' });
+
+    await logAudit({
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
+      action_module: 'Byproduct Sale Deleted',
+      details: `${record.type} (${record.sub_type || 'N/A'}), ${record.quantity} units removed`,
+      value_impact: -(record.revenue || 0)
+    });
+
+    res.json({ message: 'Byproduct sale entry deleted.' });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
 // POST: Add Operational Expense Manifest Layout Line
 // GET: Real, current sales/expenses/byproducts for a consignment — this is
 // the missing "read side" of the sync problem. Sales/expenses/byproducts
@@ -473,7 +536,19 @@ router.get('/:id/ledger', async (req, res) => {
       Expense.find({ consignment_id: cId }).sort({ date: 1 }),
       Byproduct.find({ consignment_id: cId }).sort({ date: 1 })
     ]);
-    res.json({ sales, voidedSales, expenses: expenseDocs, byproducts: byproductDocs });
+
+    // Voided individual line items stay in the database (marked voided,
+    // never deleted) but shouldn't appear to the frontend at all — this
+    // keeps every downstream calculation (revenue, stock balance, the
+    // Sales Ledger table) simple, since none of them need to know voided
+    // items exist.
+    const sanitizedSales = sales.map(sale => {
+      const obj = sale.toObject();
+      obj.items = obj.items.filter(item => !item.voided);
+      return obj;
+    });
+
+    res.json({ sales: sanitizedSales, voidedSales, expenses: expenseDocs, byproducts: byproductDocs });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -506,6 +581,51 @@ router.post('/:id/expense', async (req, res) => {
     });
 
     res.status(201).json(newExpense);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// PUT/DELETE: Correct or remove a mistaken expense entry. Admin-only.
+router.put('/:id/expense/:expenseId', adminOnly, async (req, res) => {
+  try {
+    const record = await Expense.findById(req.params.expenseId);
+    if (!record) return res.status(404).json({ message: 'Expense record not found.' });
+
+    if (req.body.date !== undefined) record.date = req.body.date;
+    if (req.body.category !== undefined) record.category = req.body.category;
+    if (req.body.description !== undefined) record.description = req.body.description;
+    if (req.body.amount !== undefined) record.amount = Number(req.body.amount) || 0;
+    await record.save();
+
+    await logAudit({
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
+      action_module: 'Expense Corrected',
+      details: `${record.category}: ${record.description} edited`,
+      value_impact: 0
+    });
+
+    res.json(record);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+router.delete('/:id/expense/:expenseId', adminOnly, async (req, res) => {
+  try {
+    const record = await Expense.findByIdAndDelete(req.params.expenseId);
+    if (!record) return res.status(404).json({ message: 'Expense record not found.' });
+
+    await logAudit({
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
+      action_module: 'Expense Deleted',
+      details: `${record.category}: ${record.description} removed`,
+      value_impact: -(record.amount || 0)
+    });
+
+    res.json({ message: 'Expense entry deleted.' });
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
@@ -552,6 +672,39 @@ router.put('/:id/invoice/:invoiceId/repay', async (req, res) => {
   }
 });
 
+// DELETE: Undo the most recent payment recorded against an invoice — for
+// correcting a mistaken amount. Admin-only. A full payment-history view
+// with per-payment deletion would be the more complete version of this,
+// but "undo the last one" covers the common case (a typo just entered)
+// without that larger build.
+router.delete('/:id/invoice/:invoiceId/repay/last', adminOnly, async (req, res) => {
+  try {
+    const target = await Sale.findById(req.params.invoiceId);
+    if (!target) return res.status(404).json({ message: 'Invoice record context vanished.' });
+
+    const lastPayment = await DebtPayment.findOne({ sale_id: target._id }).sort({ createdAt: -1 });
+    if (!lastPayment) {
+      return res.status(404).json({ message: 'No payments recorded on this invoice to undo.' });
+    }
+
+    target.amount_paid = Math.max(0, (target.amount_paid || 0) - lastPayment.amount_paid);
+    await target.save();
+    await DebtPayment.findByIdAndDelete(lastPayment._id);
+
+    await logAudit({
+      operator_id: req.user._id,
+      operator_name: req.user.name || req.user.email,
+      action_module: 'Payment Undone',
+      details: `Reversed payment of ${lastPayment.amount_paid} for ${target.customer_name}'s invoice`,
+      value_impact: -lastPayment.amount_paid
+    });
+
+    res.json({ message: 'Last payment undone.', target });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
 // PUT: Record additional physical delivery against an already-sold invoice
 // line item. Never touches stock — stock was already deducted when the
 // sale itself was recorded, since the goods are committed to this customer
@@ -567,7 +720,10 @@ router.put('/:id/invoice/:invoiceId/supply', async (req, res) => {
     if (!item) return res.status(404).json({ message: 'Invoice line item not found.' });
 
     const addQty = Number(additionalQty) || 0;
-    const newDelivered = Math.min(item.quantity_sold, (item.quantity_delivered || 0) + addQty);
+    // Clamped both directions: negative addQty allows correcting an
+    // accidentally over-entered delivered quantity back down (was
+    // previously add-only, with no way to reduce a mistaken entry).
+    const newDelivered = Math.max(0, Math.min(item.quantity_sold, (item.quantity_delivered || 0) + addQty));
     item.quantity_delivered = newDelivered;
 
     await target.save();
@@ -576,7 +732,7 @@ router.put('/:id/invoice/:invoiceId/supply', async (req, res) => {
       operator_id: req.user._id,
       operator_name: req.user.name || req.user.email,
       action_module: 'Supply Fulfillment',
-      details: `${item.item_name} (${item.actual_size}) for ${target.customer_name}: +${addQty} supplied, now ${newDelivered}/${item.quantity_sold}`,
+      details: `${item.item_name} (${item.actual_size}) for ${target.customer_name}: ${addQty >= 0 ? '+' : ''}${addQty} supplied, now ${newDelivered}/${item.quantity_sold}`,
       value_impact: 0
     });
 
@@ -602,15 +758,35 @@ router.put('/:id/invoice/:invoiceId/void', adminOnly, async (req, res) => {
       return res.status(400).json({ message: 'This invoice has already been voided.' });
     }
 
-    const alreadyDelivered = target.items.some(item => (item.quantity_delivered || 0) > 0);
+    const { itemIndex } = req.body;
+    const hasItemIndex = itemIndex !== undefined && itemIndex !== null;
+
+    // Which items are we actually voiding right now — either just the one
+    // specified, or every still-active item on the invoice.
+    const itemsToVoid = hasItemIndex
+      ? [target.items[itemIndex]].filter(Boolean)
+      : target.items.filter(item => !item.voided);
+
+    if (itemsToVoid.length === 0) {
+      return res.status(404).json({ message: 'Invoice line item not found.' });
+    }
+    if (hasItemIndex && itemsToVoid[0].voided) {
+      return res.status(400).json({ message: 'This item has already been voided.' });
+    }
+
+    const alreadyDelivered = itemsToVoid.some(item => (item.quantity_delivered || 0) > 0);
     if (alreadyDelivered) {
       return res.status(400).json({
-        message: 'Cannot void — at least one item on this invoice has already been marked as supplied. Handle this as a manual return/adjustment instead.'
+        message: hasItemIndex
+          ? 'Cannot void — this item has already been marked as supplied. Handle this as a manual return/adjustment instead.'
+          : 'Cannot void — at least one item on this invoice has already been marked as supplied. Handle this as a manual return/adjustment instead.'
       });
     }
 
-    // Release reserved stock back to available inventory for every item
-    for (const item of target.items) {
+    // Release reserved stock back to available inventory for the item(s)
+    // actually being voided — not the whole invoice, when only one item
+    // was targeted.
+    for (const item of itemsToVoid) {
       const code = (item.item_name || '').toUpperCase().trim();
       const product = await ProductItem.findOne({ itemCode: code });
       if (!product) continue;
@@ -622,23 +798,45 @@ router.put('/:id/invoice/:invoiceId/void', adminOnly, async (req, res) => {
         variation.quantity_sold = Math.max(0, (variation.quantity_sold || 0) - item.quantity_sold);
         await product.save();
       }
+
+      item.voided = true;
     }
 
-    target.status = 'voided';
-    target.voided_at = new Date();
-    target.voided_by = req.user._id;
-    target.void_reason = req.body.reason || '';
+    // If every item on the invoice is now voided, promote it to a full
+    // invoice void so it's correctly excluded from the active sales list.
+    const allVoided = target.items.every(item => item.voided);
+
+    if (allVoided) {
+      target.status = 'voided';
+      target.voided_at = new Date();
+      target.voided_by = req.user._id;
+      target.void_reason = req.body.reason || '';
+    }
+    // Note: if not all items are voided and payment_type is 'Cash', we
+    // re-sync amount_paid to the new (lower) gross_revenue after the save
+    // below, since a Cash sale is always fully paid by definition. Part
+    // Payment/Credit invoices keep whatever was actually received — that
+    // figure doesn't automatically change just because the invoice total
+    // did, and may need manual review if it now exceeds the new total.
+
     await target.save();
+
+    if (!allVoided && target.payment_type === 'Cash') {
+      target.amount_paid = target.gross_revenue;
+      await target.save();
+    }
 
     await logAudit({
       operator_id: req.user._id,
       operator_name: req.user.name || req.user.email,
-      action_module: 'Sale Voided',
-      details: `Invoice for ${target.customer_name} voided${req.body.reason ? `: ${req.body.reason}` : ''}`,
-      value_impact: -target.gross_revenue
+      action_module: hasItemIndex ? 'Sale Item Voided' : 'Sale Voided',
+      details: hasItemIndex
+        ? `${itemsToVoid[0].item_name} (${itemsToVoid[0].actual_size}) removed from ${target.customer_name}'s invoice${req.body.reason ? `: ${req.body.reason}` : ''}`
+        : `Invoice for ${target.customer_name} voided${req.body.reason ? `: ${req.body.reason}` : ''}`,
+      value_impact: -itemsToVoid.reduce((sum, i) => sum + i.revenue, 0)
     });
 
-    res.json({ message: 'Invoice voided and stock released.', target });
+    res.json({ message: hasItemIndex ? 'Item voided and stock released.' : 'Invoice voided and stock released.', target });
   } catch (err) {
     res.status(400).json({ message: err.message });
   }

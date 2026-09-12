@@ -47,6 +47,11 @@ const SaleItemSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // A single invoice can have multiple different items (e.g. one sale to
+  // Mary with both LMD and CR). Voiding needs to work per-item, not just
+  // for the whole invoice — this flag marks one specific line item as
+  // cancelled without touching the others.
+  voided: { type: Boolean, default: false },
   set_price: { 
     type: Number, 
     required: false,
@@ -158,7 +163,11 @@ SaleSchema.pre('save', function(next) {
     else if (item.variance === 0) item.performance = 'On Target';
     else item.performance = 'Below Target';
 
-    computedGross += item.revenue;
+    // Voided items keep their historical revenue value for the audit
+    // trail, but don't count toward the invoice's active total.
+    if (!item.voided) {
+      computedGross += item.revenue;
+    }
   }
 
   // Consolidate final document summary fields

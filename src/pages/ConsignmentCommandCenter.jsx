@@ -24,24 +24,42 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
   // Supply/delivery update inline form state — keyed by `${invoiceId}-${itemIndex}`
   const [supplyingRowKey, setSupplyingRowKey] = useState(null);
   const [supplyAmount, setSupplyAmount] = useState('');
+  // 'add': incremental — staff entering units just physically handed over.
+  // 'adjust': absolute target — correcting a mistaken delivered quantity.
+  // Both call the same backend endpoint (which is delta-based); 'adjust'
+  // mode just computes the right delta from the target you type, so you
+  // never have to do that math yourself.
+  const [supplyMode, setSupplyMode] = useState('add');
 
   // Void sale inline form state
   const [voidingInvoiceId, setVoidingInvoiceId] = useState(null);
   const [voidReason, setVoidReason] = useState('');
+  const [isVoidSubmitting, setIsVoidSubmitting] = useState(false);
 
-  const handleVoidSale = async (invoiceId) => {
-    if (!voidReason.trim()) return;
+  const handleVoidSale = async (invoiceId, itemIndex) => {
+    if (!voidReason.trim() || isVoidSubmitting) return;
 
+    setIsVoidSubmitting(true);
     setFeedbackMsg(null);
     try {
       await apiClient.put(`/consignments/${consignment.id}/invoice/${invoiceId}/void`, {
-        reason: voidReason.trim()
+        reason: voidReason.trim(),
+        itemIndex
       });
 
-      // Remove the voided invoice from the local view — matches the
-      // backend, which excludes voided sales from the active ledger.
-      setSalesLog(prev => prev.filter(inv => (inv.backendId || inv.id) !== invoiceId));
-      setFeedbackMsg({ type: 'success', text: 'Invoice voided and stock released.' });
+      // Remove just the voided item from that invoice locally — not the
+      // whole invoice, since a multi-item sale to one customer can have
+      // other still-active items that shouldn't disappear. If this was
+      // the invoice's only remaining item, the invoice itself goes away
+      // too, matching the backend's auto-promotion to a full void.
+      setSalesLog(prev => prev
+        .map(inv => {
+          if ((inv.backendId || inv.id) !== invoiceId) return inv;
+          return { ...inv, items: inv.items.filter((_, idx) => idx !== itemIndex) };
+        })
+        .filter(inv => inv.items.length > 0)
+      );
+      setFeedbackMsg({ type: 'success', text: 'Item voided and stock released.' });
       setVoidingInvoiceId(null);
       setVoidReason('');
     } catch (err) {
@@ -50,6 +68,52 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
         type: 'error',
         text: err.response?.data?.message || 'Failed to void sale. Please try again.'
       });
+    } finally {
+      setIsVoidSubmitting(false);
+    }
+  };
+
+  const handleDeleteByproduct = async (byproductId) => {
+    if (!window.confirm('Delete this byproduct sale entry? This cannot be undone.')) return;
+    setFeedbackMsg(null);
+    try {
+      await apiClient.delete(`/consignments/${consignment.id}/byproduct-sale/${byproductId}`);
+      setByproductSales(prev => prev.filter(s => s.id !== byproductId));
+      setFeedbackMsg({ type: 'success', text: 'Byproduct sale entry deleted.' });
+    } catch (err) {
+      console.error('Failed to delete byproduct sale:', err.response?.data || err.message);
+      setFeedbackMsg({ type: 'error', text: err.response?.data?.message || 'Failed to delete entry.' });
+    }
+  };
+
+  const handleDeleteExpense = async (expenseId) => {
+    if (!window.confirm('Delete this expense entry? This cannot be undone.')) return;
+    setFeedbackMsg(null);
+    try {
+      await apiClient.delete(`/consignments/${consignment.id}/expense/${expenseId}`);
+      setExpenses(prev => prev.filter(e => e.id !== expenseId));
+      setFeedbackMsg({ type: 'success', text: 'Expense entry deleted.' });
+    } catch (err) {
+      console.error('Failed to delete expense:', err.response?.data || err.message);
+      setFeedbackMsg({ type: 'error', text: err.response?.data?.message || 'Failed to delete entry.' });
+    }
+  };
+
+  const handleUndoLastPayment = async (invoiceId) => {
+    if (!window.confirm('Undo the most recent payment on this invoice?')) return;
+    setFeedbackMsg(null);
+    try {
+      const response = await apiClient.delete(`/consignments/${consignment.id}/invoice/${invoiceId}/repay/last`);
+      const updatedSale = response.data.target;
+      setSalesLog(prev => prev.map(inv =>
+        (inv.backendId || inv.id) === invoiceId
+          ? { ...inv, amountPaid: updatedSale.amount_paid }
+          : inv
+      ));
+      setFeedbackMsg({ type: 'success', text: 'Last payment undone.' });
+    } catch (err) {
+      console.error('Failed to undo payment:', err.response?.data || err.message);
+      setFeedbackMsg({ type: 'error', text: err.response?.data?.message || 'No payment to undo.' });
     }
   };
 
@@ -81,9 +145,20 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
     }
   };
 
-  const handleRecordSupply = async (invoiceId, itemIndex) => {
-    const additionalQty = Number(supplyAmount);
-    if (!additionalQty || additionalQty <= 0) return;
+  const handleRecordSupply = async (invoiceId, itemIndex, currentDelivered = 0) => {
+    const typedValue = Number(supplyAmount);
+    if (isNaN(typedValue)) return;
+
+    // In 'adjust' mode the user typed the value they want it to BECOME
+    // (e.g. "0" to fully retract, "2" to correct down to 2) — convert that
+    // to the delta the backend actually expects. In 'add' mode, what's
+    // typed already IS the delta (units just physically handed over).
+    const additionalQty = supplyMode === 'adjust' ? (typedValue - currentDelivered) : typedValue;
+    if (additionalQty === 0) {
+      setSupplyingRowKey(null);
+      setSupplyAmount('');
+      return;
+    }
 
     setFeedbackMsg(null);
     try {
@@ -1286,7 +1361,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                         <td className="font-sans font-semibold text-slate-200">
                           {row.customer}
                           {role === 'admin' && (
-                            voidingInvoiceId === row.invoiceId ? (
+                            voidingInvoiceId === `${row.invoiceId}-${row.itemIndex}` ? (
                               <div className="mt-1 flex items-center gap-1">
                                 <input
                                   type="text"
@@ -1298,10 +1373,11 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                                 />
                                 <button
                                   type="button"
-                                  onClick={() => handleVoidSale(row.invoiceId)}
-                                  className="bg-rose-600 text-white text-[9px] font-bold px-2 py-1 rounded cursor-pointer"
+                                  disabled={isVoidSubmitting}
+                                  onClick={() => handleVoidSale(row.invoiceId, row.itemIndex)}
+                                  className="bg-rose-600 text-white text-[9px] font-bold px-2 py-1 rounded cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
-                                  Confirm
+                                  {isVoidSubmitting ? '...' : 'Confirm'}
                                 </button>
                                 <button
                                   type="button"
@@ -1314,9 +1390,10 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => { setVoidingInvoiceId(row.invoiceId); setVoidReason(''); }}
+                                onClick={() => { setVoidingInvoiceId(`${row.invoiceId}-${row.itemIndex}`); setVoidReason(''); }}
                                 className="block mt-0.5 text-rose-500 hover:text-rose-400 text-[9px] font-sans font-medium underline cursor-pointer"
                               >
+                                Void This Item
                                 Void Sale
                               </button>
                             )
@@ -1330,25 +1407,19 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                         </td>
                         
                         <td className="py-2.5 px-3 text-center">
-                          {row.pending === 0 ? (
-                            <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
-                              <CheckCircle2 className="w-3 h-3" /> Supplied (Complete)
-                            </span>
-                          ) : supplyingRowKey === `${row.invoiceId}-${row.itemIndex}` ? (
+                          {supplyingRowKey === `${row.invoiceId}-${row.itemIndex}` ? (
                             <div className="flex items-center gap-1 justify-center">
                               <input
                                 type="number"
                                 autoFocus
-                                min="1"
-                                max={row.pending}
-                                placeholder="Qty"
+                                placeholder={supplyMode === 'adjust' ? 'New total' : '+ Qty'}
                                 value={supplyAmount}
                                 onChange={e => setSupplyAmount(e.target.value)}
                                 className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white w-16 focus:outline-none"
                               />
                               <button
                                 type="button"
-                                onClick={() => handleRecordSupply(row.invoiceId, row.itemIndex)}
+                                onClick={() => handleRecordSupply(row.invoiceId, row.itemIndex, row.delivered)}
                                 className="bg-emerald-500 text-slate-950 text-[10px] font-bold px-2 py-1 rounded cursor-pointer"
                               >
                                 Save
@@ -1361,10 +1432,32 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                                 ✕
                               </button>
                             </div>
+                          ) : row.pending === 0 ? (
+                            <div className="flex items-center gap-1.5 justify-center">
+                              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3" /> Supplied (Complete)
+                              </span>
+                              {role === 'admin' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSupplyMode('adjust');
+                                    setSupplyingRowKey(`${row.invoiceId}-${row.itemIndex}`);
+                                    // Pre-filled with the current value — type the
+                                    // corrected number directly, no math required.
+                                    setSupplyAmount(String(row.delivered));
+                                  }}
+                                  className="text-slate-500 hover:text-amber-400 text-[9px] underline cursor-pointer"
+                                  title="Correct the delivered quantity — type the actual correct total"
+                                >
+                                  Adjust
+                                </button>
+                              )}
+                            </div>
                           ) : (
                             <button
                               type="button"
-                              onClick={() => { setSupplyingRowKey(`${row.invoiceId}-${row.itemIndex}`); setSupplyAmount(''); }}
+                              onClick={() => { setSupplyMode('add'); setSupplyingRowKey(`${row.invoiceId}-${row.itemIndex}`); setSupplyAmount(''); }}
                               className="bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 px-2.5 py-1 rounded-full text-[10px] font-bold inline-flex items-center gap-1 cursor-pointer"
                             >
                               <AlertCircle className="w-3 h-3" /> Pending ({row.pending} {unitLabel}) — Mark Supplied
@@ -1403,7 +1496,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
               <table className="w-full text-left text-sm border-collapse">
                 <thead>
                   <tr className="border-b border-slate-700 text-slate-400 text-xs">
-                    <th>Date</th><th>Type</th><th>Sub-Type</th><th>Qty</th><th>Price</th><th className="text-right">Revenue</th>
+                    <th>Date</th><th>Type</th><th>Sub-Type</th><th>Qty</th><th>Price</th><th>Revenue</th>{role === 'admin' && <th></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1414,7 +1507,12 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                       <td className="text-xs text-slate-300">{s.subType}</td>
                       <td className="font-mono">{s.qty}</td>
                       <td className="font-mono">{currency}{s.price}</td>
-                      <td className="text-right font-bold text-emerald-400 font-mono">{currency}{s.revenue.toLocaleString()}</td>
+                      <td className="font-bold text-emerald-400 font-mono">{currency}{s.revenue.toLocaleString()}</td>
+                      {role === 'admin' && (
+                        <td className="text-right">
+                          <button type="button" onClick={() => handleDeleteByproduct(s.id)} className="text-rose-500 hover:text-rose-400 p-1 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -1455,7 +1553,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
               <table className="w-full text-left text-sm border-collapse">
                 <thead>
                   <tr className="border-b border-slate-700 text-slate-400 text-xs">
-                    <th>Date</th><th>Category</th><th>Description</th><th className="text-right">Amount</th>
+                    <th>Date</th><th>Category</th><th>Description</th><th>Amount</th>{role === 'admin' && <th></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1464,7 +1562,12 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                       <td className="py-2 text-xs font-mono text-slate-400">{e.date}</td>
                       <td className="font-bold text-white">{e.category}</td>
                       <td className="text-slate-300 text-xs">{e.description}</td>
-                      <td className="text-right font-bold text-rose-400 font-mono">{currency}{e.amount.toLocaleString()}</td>
+                      <td className="font-bold text-rose-400 font-mono">{currency}{e.amount.toLocaleString()}</td>
+                      {role === 'admin' && (
+                        <td className="text-right">
+                          <button type="button" onClick={() => handleDeleteExpense(e.id)} className="text-rose-500 hover:text-rose-400 p-1 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -1570,13 +1673,23 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                             </button>
                           </div>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => { setRepayingInvoiceId(debt.id); setRepayAmount(''); }}
-                            className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-[10px] font-bold px-3 py-1.5 rounded-lg cursor-pointer"
-                          >
-                            Record Payment
-                          </button>
+                          <div className="flex items-center gap-2 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => { setRepayingInvoiceId(debt.id); setRepayAmount(''); }}
+                              className="bg-amber-500 hover:bg-amber-600 text-slate-950 text-[10px] font-bold px-3 py-1.5 rounded-lg cursor-pointer"
+                            >
+                              Record Payment
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUndoLastPayment(debt.id)}
+                              className="text-slate-400 hover:text-rose-400 text-[9px] underline cursor-pointer"
+                              title="Undo the most recent payment on this invoice"
+                            >
+                              Undo Last
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>

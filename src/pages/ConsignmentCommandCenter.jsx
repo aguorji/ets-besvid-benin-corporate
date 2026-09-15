@@ -232,6 +232,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
           customer: s.customer_name,
           paymentType: s.payment_type,
           amountPaid: s.amount_paid,
+          overpaymentCredit: s.overpayment_credit || 0,
           total: s.gross_revenue,
           date: new Date(s.date || s.createdAt).toLocaleDateString(),
           items: (s.items || []).map(it => ({
@@ -934,7 +935,8 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
           balance: item.revenue - (item.revenue * itemWeightFactor),
           sourceRef: item.sourceConsignmentRef || consignment.consignmentRef,
           delivered: deliveredQty,
-          pending: pendingQty
+          pending: pendingQty,
+          overpaymentCredit: inv.overpaymentCredit || 0
         });
       });
     });
@@ -1403,6 +1405,11 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                           <div className="text-emerald-400 font-bold">{currency}{row.amountPaid.toLocaleString(undefined, {maximumFractionDigits: 2})}</div>
                           {row.balance > 0.01 && (
                             <div className="text-rose-400 text-[10px]">Bal: {currency}{row.balance.toLocaleString(undefined, {maximumFractionDigits: 2})}</div>
+                          )}
+                          {row.overpaymentCredit > 0.01 && (
+                            <div className="text-amber-400 text-[10px] font-bold" title="Customer paid more than the invoice total after a partial void — review for refund">
+                              ⚠ Credit owed: {currency}{row.overpaymentCredit.toLocaleString(undefined, {maximumFractionDigits: 2})}
+                            </div>
                           )}
                         </td>
                         

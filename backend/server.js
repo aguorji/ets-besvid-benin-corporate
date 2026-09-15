@@ -6,6 +6,8 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 // Load secure environment variables from hidden configuration manager
 dotenv.config();
@@ -23,11 +25,24 @@ import auditLogRoutes from './routes/auditLogRoutes.js';
 const app = express();
 
 // 1. Secure Middleware Layers
+app.use(helmet()); // Sets a standard set of security-related HTTP headers
 app.use(express.json()); // Parses incoming transaction entries JSON bodies
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173', // Restricts access only to your trusted frontend app
   optionsSuccessStatus: 200
 }));
+
+// General API rate limit — a lighter, broader safety net beyond the
+// stricter login-specific limiter in authRoutes.js. Generous enough not to
+// interfere with normal staff usage, but stops unlimited scripted abuse
+// against any endpoint.
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 300,                 // 300 requests per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api', apiLimiter);
 
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} request to ${req.url}`);

@@ -836,6 +836,19 @@ router.put('/:id/invoice/:invoiceId/void', adminOnly, async (req, res) => {
       value_impact: -itemsToVoid.reduce((sum, i) => sum + i.revenue, 0)
     });
 
+    // Flag it loudly if this partial void just created a real overpayment —
+    // previously this case just left a confusing negative balance sitting
+    // in the database with nothing pointing an admin toward it.
+    if (target.overpayment_credit > 0) {
+      await logAudit({
+        operator_id: req.user._id,
+        operator_name: req.user.name || req.user.email,
+        action_module: 'Overpayment Created — Review Needed',
+        details: `${target.customer_name} now has a credit of ${target.overpayment_credit} following a partial void — review for refund or apply toward a future purchase.`,
+        value_impact: target.overpayment_credit
+      });
+    }
+
     res.json({ message: hasItemIndex ? 'Item voided and stock released.' : 'Invoice voided and stock released.', target });
   } catch (err) {
     res.status(400).json({ message: err.message });

@@ -28,6 +28,7 @@ export default function Dashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGeneralStockOpen, setIsGeneralStockOpen] = useState(false);
   const [isCreateStaffOpen, setIsCreateStaffOpen] = useState(false);
+  const [editingConsignmentId, setEditingConsignmentId] = useState(null);
 
   const [formData, setFormData] = useState({
     consignmentRef: '',
@@ -61,9 +62,18 @@ export default function Dashboard() {
     };
 
     try {
-      await apiClient.post('/consignments', newManifestPayload);
+      if (editingConsignmentId) {
+        // Correcting an existing consignment's metadata — a gap that
+        // existed before (the old Consignments.jsx had this, but nothing
+        // replaced it when that page was removed). Typos in landing cost,
+        // currency, or weight had no way to be fixed after the fact.
+        await apiClient.put(`/consignments/${editingConsignmentId}`, newManifestPayload);
+      } else {
+        await apiClient.post('/consignments', newManifestPayload);
+      }
 
       setIsModalOpen(false);
+      setEditingConsignmentId(null);
       setFormData({ 
         consignmentRef: '', 
         type: 'Giant Bales', 
@@ -80,6 +90,20 @@ export default function Dashboard() {
       let detailedErrorMsg = responseData?.message || responseData?.error || JSON.stringify(responseData) || err.message;
       alert(`Failed to commit record:\n${detailedErrorMsg}`);
     }
+  };
+
+  const startEditingConsignment = (row) => {
+    setEditingConsignmentId(row.id);
+    setCurrency(row.raw?.currency || currency);
+    setFormData({
+      consignmentRef: row.consignmentRef || '',
+      type: row.raw?.type || 'Giant Bales',
+      vesselIdentity: row.raw?.vessel_identity || '',
+      estBaseLandingCost: row.raw?.total_landing_cost || '',
+      totalVolumeCount: row.raw?.total_volume_count || '',
+      totalGrossMassWeight: row.raw?.total_gross_weight || ''
+    });
+    setIsModalOpen(true);
   };
 
   const handleLogout = () => {
@@ -227,12 +251,21 @@ export default function Dashboard() {
                           </span>
                         </td>
                         <td className="py-4 px-4 text-right">
-                          <button 
-                            onClick={() => setActiveWorkspace(row)}
-                            className="bg-slate-800 hover:bg-slate-750 text-amber-500 hover:text-amber-400 font-bold text-xs border border-slate-700 rounded-lg px-3 py-1.5 transition cursor-pointer"
-                          >
-                            Open Dashboard
-                          </button>
+                          <div className="flex items-center gap-2 justify-end">
+                            <button 
+                              onClick={() => startEditingConsignment(row)}
+                              className="bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white text-xs border border-slate-700 rounded-lg px-3 py-1.5 transition cursor-pointer"
+                              title="Correct landing cost, currency, volume, weight, or vessel details"
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              onClick={() => setActiveWorkspace(row)}
+                              className="bg-slate-800 hover:bg-slate-750 text-amber-500 hover:text-amber-400 font-bold text-xs border border-slate-700 rounded-lg px-3 py-1.5 transition cursor-pointer"
+                            >
+                              Open Dashboard
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -248,9 +281,13 @@ export default function Dashboard() {
           <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
               <h2 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
-                <Package className="w-5 h-5 text-amber-500" /> Manifest Intake Setup Profile
+                <Package className="w-5 h-5 text-amber-500" /> {editingConsignmentId ? 'Correct Consignment Details' : 'Manifest Intake Setup Profile'}
               </h2>
-              <p className="text-slate-400 text-xs mb-4">Initialize tracking data profiles for inventory tracking.</p>
+              <p className="text-slate-400 text-xs mb-4">
+                {editingConsignmentId
+                  ? 'Correcting existing metadata — landing cost, currency, volume, weight, or vessel details.'
+                  : 'Initialize tracking data profiles for inventory tracking.'}
+              </p>
 
               <form onSubmit={handleCreateManifest} className="space-y-3">
                 <div>
@@ -268,7 +305,8 @@ export default function Dashboard() {
                 </div>
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Consignment Ref</label>
-                  <input type="text" required placeholder="e.g. GB-2026-XYZ" value={formData.consignmentRef} onChange={e => setFormData({...formData, consignmentRef: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 font-mono" />
+                  <input type="text" required disabled={!!editingConsignmentId} placeholder="e.g. GB-2026-XYZ" value={formData.consignmentRef} onChange={e => setFormData({...formData, consignmentRef: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 font-mono disabled:opacity-60 disabled:cursor-not-allowed" />
+                  {editingConsignmentId && <p className="text-[10px] text-slate-500 mt-1">Reference can't be changed after creation — it's used to link production/stock data internally.</p>}
                 </div>
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Vessel / Carrier Identity</label>
@@ -290,8 +328,8 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex justify-end gap-2 pt-4 border-t border-slate-800 mt-4">
-                  <button type="button" onClick={() => setIsModalOpen(false)} className="bg-slate-800 text-slate-300 font-semibold px-4 py-2 rounded-xl text-xs hover:bg-slate-750 transition cursor-pointer">Cancel</button>
-                  <button type="submit" className="bg-amber-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs hover:bg-amber-400 transition cursor-pointer">Commit Data Profile</button>
+                  <button type="button" onClick={() => { setIsModalOpen(false); setEditingConsignmentId(null); }} className="bg-slate-800 text-slate-300 font-semibold px-4 py-2 rounded-xl text-xs hover:bg-slate-750 transition cursor-pointer">Cancel</button>
+                  <button type="submit" className="bg-amber-500 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs hover:bg-amber-400 transition cursor-pointer">{editingConsignmentId ? 'Save Corrections' : 'Commit Data Profile'}</button>
                 </div>
               </form>
             </div>

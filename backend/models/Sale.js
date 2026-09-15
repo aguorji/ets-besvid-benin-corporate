@@ -121,6 +121,14 @@ const SaleSchema = new mongoose.Schema({
     enum: ['N/A', 'Owing', 'Settled'], 
     default: 'N/A' 
   },
+  // If a partial void on a Part Payment/Credit invoice leaves amount_paid
+  // higher than the new (smaller) gross_revenue, that's a real overpayment
+  // owed back to the customer — not a debt they owe. Tracked here
+  // separately instead of letting balance go negative and invisible.
+  overpayment_credit: {
+    type: Number,
+    default: 0
+  },
   
   // Crucial: Tracks which staff member processed this invoice
   recorded_by: { 
@@ -177,11 +185,23 @@ SaleSchema.pre('save', function(next) {
   if (this.payment_type === 'Cash') {
     this.amount_paid = this.gross_revenue;
     this.balance = 0;
+    this.overpayment_credit = 0;
     this.debt_status = 'N/A';
   } else {
     const rawBalance = this.gross_revenue - this.amount_paid;
-    this.balance = Math.round(rawBalance * 100) / 100;
-    this.debt_status = this.balance > 0 ? 'Owing' : 'Settled';
+    if (rawBalance < 0) {
+      // Amount already paid now exceeds the total (e.g. an item was
+      // voided after partial payment) — this is owed BACK to the
+      // customer, not a debt they owe. balance stays a clean, honest 0
+      // rather than a confusing negative number.
+      this.balance = 0;
+      this.overpayment_credit = Math.round(-rawBalance * 100) / 100;
+      this.debt_status = 'Settled';
+    } else {
+      this.balance = Math.round(rawBalance * 100) / 100;
+      this.overpayment_credit = 0;
+      this.debt_status = this.balance > 0 ? 'Owing' : 'Settled';
+    }
   }
   next();
 });

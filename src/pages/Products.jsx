@@ -266,7 +266,15 @@ export default function Products() {
             {filteredProducts.map(product => (
               <div key={product.itemCode} className="bg-white border border-navy/10 rounded overflow-hidden shadow-xs hover:shadow-md transition-all duration-300 flex flex-col">
                 <div className="h-32 bg-navy flex items-center justify-center relative overflow-hidden group">
-                  <Package className="text-gold/20 w-12 h-12 transform group-hover:scale-110 transition-transform duration-500" />
+                  {product.imageUrl ? (
+                    <img
+                      src={product.imageUrl}
+                      alt={product.itemCode}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Package className="text-gold/20 w-12 h-12 transform group-hover:scale-110 transition-transform duration-500" />
+                  )}
                   <span className="absolute bottom-3 left-3 bg-navy/90 text-white font-mono text-[11px] tracking-wider px-2 py-0.5 rounded border border-white/10">
                     {product.itemCode}
                   </span>

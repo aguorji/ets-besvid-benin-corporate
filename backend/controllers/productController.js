@@ -1,6 +1,7 @@
 // backend/controllers/productController.js
 import ProductItem from '../models/ProductItem.js';
 import Consignment from '../models/Consignment.js';
+import cloudinary from '../config/cloudinary.js';
 
 // @desc    Register a completely new root product type
 // @route   POST /api/products
@@ -127,5 +128,94 @@ export const addStockVariation = async (req, res) => {
     res.status(201).json(product);
   } catch (error) {
     res.status(500).json({ message: 'Error logging stock variation', error: error.message });
+  }
+};
+// @desc    Upload or replace a product's photo. Admin-only (enforced at
+//          the route level). The file arrives in memory via multer, gets
+//          pushed to Cloudinary from here (server-side, so the API secret
+//          never reaches the browser), and only the resulting URL is
+//          saved to MongoDB — the actual image bytes never touch the
+//          database at all.
+// @route   POST /api/products/:productId/image
+export const uploadProductImage = async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'No image file was received.' });
+    }
+
+    const product = await ProductItem.findById(productId);
+    if (!product) {
+      return res.status(404).json({ message: 'Product item catalog reference not found.' });
+    }
+
+    // Upload the in-memory file buffer to Cloudinary
+    const uploadResult = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        {
+          folder: 'ets-besvid-products',
+          public_id: product.itemCode,
+          overwrite: true,
+          resource_type: 'image'
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      stream.end(req.file.buffer);
+    });
+
+    product.imageUrl = uploadResult.secure_url;
+    await product.save();
+
+    res.status(200).json({ message: 'Product photo updated successfully.', product });
+  } catch (error) {
+    console.error('Photo upload failed:', error);
+    res.status(500).json({ message: error.message || 'Error uploading product photo', error: error.message });
+  }
+};
+
+// @desc    Same as uploadProductImage, but looked up by itemCode instead
+//          of MongoDB _id — used from the Production Ledger, which only
+//          ever knows an item's code (e.g. "CR"), not its database ID.
+// @route   POST /api/products/by-code/:itemCode/image
+export const uploadProductImageByCode = async (req, res) => {
+  try {
+    const itemCode = (req.params.itemCode || '').toUpperCase().trim();
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'No image file was received.' });
+    }
+
+    const product = await ProductItem.findOne({ itemCode });
+    if (!product) {
+      return res.status(404).json({ message: `No catalog entry found for item code '${itemCode}'.` });
+    }
+
+    const uploadResult = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        {
+          folder: 'ets-besvid-products',
+          public_id: product.itemCode,
+          overwrite: true,
+          resource_type: 'image'
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      stream.end(req.file.buffer);
+    });
+
+    product.imageUrl = uploadResult.secure_url;
+    await product.save();
+
+    res.status(200).json({ message: 'Product photo updated successfully.', product });
+  } catch (error) {
+    console.error('Photo upload failed:', error);
+    res.status(500).json({ message: error.message || 'Error uploading product photo', error: error.message });
   }
 };

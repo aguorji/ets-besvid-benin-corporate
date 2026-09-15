@@ -27,6 +27,13 @@ const ProductItemSchema = new mongoose.Schema({
   // Master baseline price for a standard bale/unit
   basePrice: { type: Number, required: true, default: 0 }, 
 
+  // A photo is a property of the item itself (CR always looks like CR,
+  // regardless of which consignment it came from) — belongs on the master
+  // catalog, same reasoning as description/unit/standardSize. Stores a
+  // Cloudinary URL only; the actual image file lives on Cloudinary, never
+  // in MongoDB.
+  imageUrl: { type: String, default: '' },
+
   stock_variations: [VariationSchema]
 }, { 
   timestamps: true, 

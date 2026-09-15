@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   FileText, TrendingUp, ShoppingBag, Layers, 
-  DollarSign, BarChart2, Users, Wallet, Plus, Trash2, ArrowLeft, Upload, AlertCircle, CheckCircle2 
+  DollarSign, BarChart2, Users, Wallet, Plus, Trash2, ArrowLeft, Upload, AlertCircle, CheckCircle2, Camera, Loader2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import apiClient from '../api/client';
@@ -33,6 +33,7 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
 
   // Void sale inline form state
   const [voidingInvoiceId, setVoidingInvoiceId] = useState(null);
+  const [uploadingPhotoFor, setUploadingPhotoFor] = useState(null);
   const [voidReason, setVoidReason] = useState('');
   const [isVoidSubmitting, setIsVoidSubmitting] = useState(false);
 
@@ -70,6 +71,28 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
       });
     } finally {
       setIsVoidSubmitting(false);
+    }
+  };
+
+  const handleItemPhotoUpload = async (itemCode, file) => {
+    if (!file) return;
+    setUploadingPhotoFor(itemCode);
+    setFeedbackMsg(null);
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+      await apiClient.post(`/products/by-code/${itemCode}/image`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      setFeedbackMsg({ type: 'success', text: `Photo saved for ${itemCode}.` });
+    } catch (err) {
+      console.error('Photo upload failed:', err.response?.data || err.message);
+      setFeedbackMsg({
+        type: 'error',
+        text: err.response?.data?.message || `Failed to upload photo for ${itemCode}. Please try again.`
+      });
+    } finally {
+      setUploadingPhotoFor(null);
     }
   };
 
@@ -1173,7 +1196,28 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                             </span>
                           </td>
                           <td className="py-2 px-2 text-center">
-                            <button type="button" onClick={() => handleDeleteProductionRow(p.id)} className="text-slate-500 hover:text-rose-400 p-1 transition cursor-pointer"><Trash2 className="w-4 h-4" /></button>
+                            <div className="flex items-center justify-center gap-1">
+                              {role === 'admin' && (
+                                <label
+                                  className="text-slate-500 hover:text-amber-400 p-1 transition cursor-pointer"
+                                  title={`${uploadingPhotoFor === p.item ? 'Uploading...' : 'Add/Replace Photo'}`}
+                                >
+                                  {uploadingPhotoFor === p.item ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Camera className="w-4 h-4" />
+                                  )}
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    className="hidden"
+                                    disabled={uploadingPhotoFor === p.item}
+                                    onChange={(e) => handleItemPhotoUpload(p.item, e.target.files[0])}
+                                  />
+                                </label>
+                              )}
+                              <button type="button" onClick={() => handleDeleteProductionRow(p.id)} className="text-slate-500 hover:text-rose-400 p-1 transition cursor-pointer"><Trash2 className="w-4 h-4" /></button>
+                            </div>
                           </td>
                         </tr>
                       ))

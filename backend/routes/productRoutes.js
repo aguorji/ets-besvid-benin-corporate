@@ -42,7 +42,9 @@ router.route('/:productId')
 router.post('/:productId/image', adminOnly, upload.single('image'), uploadProductImage);
 
 // Same thing, looked up by item code — used from the Production Ledger,
-// which only knows an item's code, not its database ID
-router.post('/by-code/:itemCode/image', adminOnly, upload.single('image'), uploadProductImageByCode);
+// which only knows an item's code, not its database ID. Open to staff too
+// (not adminOnly) — a photo upload is an operational task, not sensitive
+// catalog editing like price/quantity changes.
+router.post('/by-code/:itemCode/image', upload.single('image'), uploadProductImageByCode);
 
 export default router;

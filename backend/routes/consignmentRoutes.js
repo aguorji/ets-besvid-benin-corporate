@@ -46,61 +46,70 @@ function normalizeUnit(rawUnit) {
 async function syncProductionToProducts(productionItems, consignmentRef, consignmentId) {
   if (!productionItems || !Array.isArray(productionItems)) return;
 
+  // Group rows by item code first. Previously this queried AND saved once
+  // per ROW — an item with 3 different sizes in this consignment triggered
+  // 3 separate findOne calls and 3 separate saves for what's really just
+  // one product document. For a large consignment (dozens of items, some
+  // with multiple size variants), that's enough sequential MongoDB
+  // round-trips to genuinely exceed a 10s+ request timeout.
+  const rowsByCode = new Map();
   for (const row of productionItems) {
     const itemCode = (row.itemCode || '').toUpperCase().trim();
     if (!itemCode) continue;
+    if (!rowsByCode.has(itemCode)) rowsByCode.set(itemCode, []);
+    rowsByCode.get(itemCode).push(row);
+  }
 
-    const actualSize = Number(row.actualSize || row.standardSize || 0);
-    const standardSize = Number(row.standardSize || 0);
-    const quantityBales = Number(row.balesQuantity || row.quantity || 0);
-    const basePrice = Number(row.priceStd || row.price || 0);
-    const adjPrice = Number(row.adjustedPrice || basePrice);
-    // ProductItem.VariationSchema requires size_type — derive it instead of
-    // omitting it (which previously failed schema validation on every row).
-    const sizeType = (actualSize && standardSize && actualSize !== standardSize)
-      ? 'adjusted'
-      : 'standard';
+  const allCodes = Array.from(rowsByCode.keys());
+  if (allCodes.length === 0) return;
 
-    // Unique per item + actual size within this consignment. Using just
-    // consignmentRef (the old behavior) collided across every item in the
-    // batch, since production_ref carries a UNIQUE index across the whole
-    // productitems collection, not just within one product — only the first
-    // item in any consignment could ever have been saved successfully.
-    const productionRef = `${consignmentRef}-${itemCode}-${actualSize}`;
+  // ONE query fetches every existing product at once, instead of one
+  // query per row.
+  const existingProducts = await ProductItem.find({ itemCode: { $in: allCodes } });
+  const productMap = new Map(existingProducts.map(p => [p.itemCode, p]));
 
+  // Each item code is independent of every other — process them
+  // concurrently rather than waiting for each one's full save to finish
+  // before starting the next.
+  await Promise.all(allCodes.map(async (itemCode) => {
+    const rows = rowsByCode.get(itemCode);
     try {
-      // 1. Find the root product or create it if it doesn't exist yet
-      let product = await ProductItem.findOne({ itemCode });
+      let product = productMap.get(itemCode);
+
+      // Catalog-level fields (description/unit/standardSize/basePrice) are
+      // the same for every size variant of one item code — established
+      // from the first row seen for this item.
+      const firstRow = rows[0];
+      const standardSizeFirst = Number(firstRow.standardSize || 0);
+      const basePriceFirst = Number(firstRow.priceStd || firstRow.price || 0);
 
       if (!product) {
-        product = await ProductItem.create({
+        product = new ProductItem({
           itemCode,
-          description: row.description || itemCode,
-          unit: normalizeUnit(row.unit),
-          standardSize: standardSize || actualSize || 0,
-          basePrice,
+          description: firstRow.description || itemCode,
+          unit: normalizeUnit(firstRow.unit),
+          standardSize: standardSizeFirst || Number(firstRow.actualSize || 0) || 0,
+          basePrice: basePriceFirst,
           stock_variations: []
         });
       } else {
-        // Per your decision: master catalog fields (description/unit/
-        // standardSize) are frozen once set, not silently overwritten by
-        // later consignments — that's the same "silent overwrite" pattern
-        // that caused several of tonight's bugs. A mismatch gets flagged in
-        // the audit log instead, so a human can decide whether it's a real
-        // change or a data-entry typo. basePrice is treated as a rolling
-        // reference/default price and IS allowed to update, since batch
-        // pricing legitimately varies — actual per-batch pricing always
-        // lives correctly on stock_variations regardless.
+        // Per your decision: master catalog fields are frozen once set,
+        // not silently overwritten by later consignments. A mismatch gets
+        // flagged in the audit log instead, so a human can decide whether
+        // it's a real change or a data-entry typo. basePrice is treated as
+        // a rolling reference/default price and IS allowed to update,
+        // since actual per-batch pricing always lives correctly on
+        // stock_variations regardless.
         const mismatches = [];
-        if (row.description && row.description !== itemCode && product.description !== row.description) {
-          mismatches.push(`description ("${product.description}" vs "${row.description}")`);
+        if (firstRow.description && firstRow.description !== itemCode && product.description !== firstRow.description) {
+          mismatches.push(`description ("${product.description}" vs "${firstRow.description}")`);
         }
-        const incomingUnit = normalizeUnit(row.unit);
+        const incomingUnit = normalizeUnit(firstRow.unit);
         if (incomingUnit && product.unit !== incomingUnit) {
           mismatches.push(`unit ("${product.unit}" vs "${incomingUnit}")`);
         }
-        if (standardSize && product.standardSize !== standardSize) {
-          mismatches.push(`standardSize (${product.standardSize} vs ${standardSize})`);
+        if (standardSizeFirst && product.standardSize !== standardSizeFirst) {
+          mismatches.push(`standardSize (${product.standardSize} vs ${standardSizeFirst})`);
         }
 
         if (mismatches.length > 0) {
@@ -112,46 +121,57 @@ async function syncProductionToProducts(productionItems, consignmentRef, consign
           });
         }
 
-        if (basePrice) product.basePrice = basePrice;
+        if (basePriceFirst) product.basePrice = basePriceFirst;
       }
 
-      // 2. Check if this specific batch reference already exists in stock_variations
-      const existingBatchIndex = product.stock_variations.findIndex(
-        v => v.production_ref === productionRef
-      );
+      // Fold every size-variant row for this item into stock_variations —
+      // all in memory, no additional database calls per row.
+      for (const row of rows) {
+        const actualSize = Number(row.actualSize || row.standardSize || 0);
+        const standardSize = Number(row.standardSize || 0);
+        const quantityBales = Number(row.balesQuantity || row.quantity || 0);
+        const basePrice = Number(row.priceStd || row.price || 0);
+        const adjPrice = Number(row.adjustedPrice || basePrice);
+        const sizeType = (actualSize && standardSize && actualSize !== standardSize)
+          ? 'adjusted'
+          : 'standard';
+        const productionRef = `${consignmentRef}-${itemCode}-${actualSize}`;
 
-      if (existingBatchIndex > -1) {
-        // Update existing batch balance
-        const v = product.stock_variations[existingBatchIndex];
-        v.quantity_produced = quantityBales;
-        v.quantity_balance = quantityBales;
-        v.base_price = basePrice;
-        v.adj_price = adjPrice;
-        v.size_type = sizeType;
-        if (consignmentId) v.consignment_id = consignmentId;
-      } else {
-        // Push new batch/consignment variation — consignment_id, size_type,
-        // and adj_price are all required by the schema and were previously
-        // missing, which silently failed validation on every single row.
-        product.stock_variations.push({
-          production_ref: productionRef,
-          consignment_id: consignmentId,
-          actual_size: actualSize,
-          size_type: sizeType,
-          quantity_produced: quantityBales,
-          quantity_balance: quantityBales, // Crucial for terminal stock checking!
-          base_price: basePrice,
-          adj_price: adjPrice
-        });
+        const existingBatchIndex = product.stock_variations.findIndex(
+          v => v.production_ref === productionRef
+        );
+
+        if (existingBatchIndex > -1) {
+          const v = product.stock_variations[existingBatchIndex];
+          v.quantity_produced = quantityBales;
+          v.quantity_balance = quantityBales;
+          v.base_price = basePrice;
+          v.adj_price = adjPrice;
+          v.size_type = sizeType;
+          if (consignmentId) v.consignment_id = consignmentId;
+        } else {
+          product.stock_variations.push({
+            production_ref: productionRef,
+            consignment_id: consignmentId,
+            actual_size: actualSize,
+            size_type: sizeType,
+            quantity_produced: quantityBales,
+            quantity_balance: quantityBales,
+            base_price: basePrice,
+            adj_price: adjPrice
+          });
+        }
       }
 
+      // ONE save per unique item, regardless of how many size variants it
+      // had in this consignment — previously this was one save PER ROW.
       await product.save();
     } catch (err) {
-      // One bad row is now logged and skipped instead of silently killing
-      // the sync for every remaining item in the batch.
-      console.error(`syncProductionToProducts failed for itemCode "${itemCode}" (ref: ${productionRef}):`, err.message);
+      // One bad item is logged and skipped instead of silently killing the
+      // sync for every remaining item in the batch.
+      console.error(`syncProductionToProducts failed for itemCode "${itemCode}":`, err.message);
     }
-  }
+  }));
 }
 
 // GET: Stream all raw active manifests down to the dashboard run timeline

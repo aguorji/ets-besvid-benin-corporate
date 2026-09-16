@@ -1197,25 +1197,23 @@ export default function ConsignmentCommandCenter({ consignment, currency, initia
                           </td>
                           <td className="py-2 px-2 text-center">
                             <div className="flex items-center justify-center gap-1">
-                              {role === 'admin' && (
-                                <label
-                                  className="text-slate-500 hover:text-amber-400 p-1 transition cursor-pointer"
-                                  title={`${uploadingPhotoFor === p.item ? 'Uploading...' : 'Add/Replace Photo'}`}
-                                >
-                                  {uploadingPhotoFor === p.item ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                  ) : (
-                                    <Camera className="w-4 h-4" />
-                                  )}
-                                  <input
-                                    type="file"
-                                    accept="image/*"
-                                    className="hidden"
-                                    disabled={uploadingPhotoFor === p.item}
-                                    onChange={(e) => handleItemPhotoUpload(p.item, e.target.files[0])}
-                                  />
-                                </label>
-                              )}
+                              <label
+                                className="text-slate-500 hover:text-amber-400 p-1 transition cursor-pointer"
+                                title={`${uploadingPhotoFor === p.item ? 'Uploading...' : 'Add/Replace Photo'}`}
+                              >
+                                {uploadingPhotoFor === p.item ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Camera className="w-4 h-4" />
+                                )}
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  disabled={uploadingPhotoFor === p.item}
+                                  onChange={(e) => handleItemPhotoUpload(p.item, e.target.files[0])}
+                                />
+                              </label>
                               <button type="button" onClick={() => handleDeleteProductionRow(p.id)} className="text-slate-500 hover:text-rose-400 p-1 transition cursor-pointer"><Trash2 className="w-4 h-4" /></button>
                             </div>
                           </td>

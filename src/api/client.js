@@ -3,7 +3,12 @@ import axios from 'axios';
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
-  timeout: 10000, 
+  // Raised from 10s — syncing a large consignment (dozens+ of items) can
+  // legitimately take longer than 10s due to sequential database
+  // round-trips per item on the backend. This is a safety-net increase;
+  // the real fix is batching that backend loop to actually be faster, not
+  // just giving it more time to be slow.
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
